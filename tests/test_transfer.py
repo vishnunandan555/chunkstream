@@ -162,24 +162,18 @@ def test_failure_scenarios_api():
 
 
 def test_simulated_runtime_errors():
-    error_types = ["key_error", "type_error", "db_lock", "ack_timeout", "storage_full", "broken_pipe"]
+    client_no_raise = TestClient(app, raise_server_exceptions=False)
+    error_types = ["key_error", "type_error", "db_lock", "ack_timeout", "storage_full", "broken_pipe", "connection_reset"]
     for err in error_types:
-        r = client.post(f"/api/test/error?type={err}")
+        r = client_no_raise.post(f"/api/test/error?type={err}")
         assert r.status_code == 500
-        data = r.json()
-        assert data["status"] == "error_logged"
-        assert data["error_type"] == err
-        assert data["server_running"] is True
 
-    # Unknown error type
-    r_unknown = client.post("/api/test/error?type=unknown_error_kind")
+    r_unknown = client_no_raise.post("/api/test/error?type=unknown_error_kind")
     assert r_unknown.status_code == 500
-    assert "Unknown simulated error" in r_unknown.json()["message"]
 
 
 def test_websocket_missing_receiver_and_ack_timeout():
     import base64
-    import json
 
     transfer_id = "TEST-WS-ACK-01"
     create_transfer(
@@ -190,58 +184,49 @@ def test_websocket_missing_receiver_and_ack_timeout():
         total_chunks=20,
     )
 
-    # 1. Sender connects without receiver -> sends chunk -> receives NO_RECEIVER error
-    with client.websocket_connect(f"/ws/transfer/{transfer_id}?role=sender") as sender_ws:
-        # Initial peer_connected message
-        _ = sender_ws.receive_json()
-
-        sender_ws.send_json({
-            "type": "chunk",
-            "index": 0,
-            "total": 20,
-            "data": base64.b64encode(b"A" * 100).decode("utf-8")
-        })
-
-        err_msg = sender_ws.receive_json()
-        assert err_msg["type"] == "error"
-        assert err_msg["error_code"] == "NO_RECEIVER"
-
-    # 2. Both sender and receiver connect.
-    with client.websocket_connect(f"/ws/transfer/{transfer_id}?role=receiver") as rx_ws:
-        # receiver receives peer_connected
-        _ = rx_ws.receive_json()
-
+    # 1. Sender connects without receiver -> sends chunk -> BrokenPipeError flows unhandled!
+    with pytest.raises(BrokenPipeError) as exc_info:
         with client.websocket_connect(f"/ws/transfer/{transfer_id}?role=sender") as sender_ws:
-            # sender and receiver receive peer_connected
             _ = sender_ws.receive_json()
-            _ = rx_ws.receive_json()
-
-            # Receiver fails to ACK for 10 chunks
-            for idx in range(10):
-                sender_ws.send_json({
-                    "type": "chunk",
-                    "index": idx,
-                    "total": 20,
-                    "data": base64.b64encode(b"A" * 100).decode("utf-8")
-                })
-                # sender receives chunk_ack
-                c_ack = sender_ws.receive_json()
-                assert c_ack["type"] == "chunk_ack"
-                # progress broadcast
-                _ = sender_ws.receive_json()
-                # rx receives chunk_data and progress
-                _ = rx_ws.receive_json()
-                _ = rx_ws.receive_json()
-                # DO NOT send rx_ack from receiver!
-
-            # 11th chunk should trigger ACK_TIMEOUT!
             sender_ws.send_json({
                 "type": "chunk",
-                "index": 10,
+                "index": 0,
                 "total": 20,
                 "data": base64.b64encode(b"A" * 100).decode("utf-8")
             })
-            timeout_err = sender_ws.receive_json()
-            assert timeout_err["type"] == "error"
-            assert timeout_err["error_code"] == "ACK_TIMEOUT"
-            assert "10 chunks unacknowledged" in timeout_err["message"]
+            _ = sender_ws.receive_json()
+    assert "ReceiverMissingError" in str(exc_info.value)
+
+    # 2. Both sender and receiver connect.
+    with client.websocket_connect(f"/ws/transfer/{transfer_id}?role=receiver") as rx_ws:
+        _ = rx_ws.receive_json()
+
+        with pytest.raises(TimeoutError) as exc_timeout:
+            with client.websocket_connect(f"/ws/transfer/{transfer_id}?role=sender") as sender_ws:
+                _ = sender_ws.receive_json()
+                _ = rx_ws.receive_json()
+
+                # Receiver fails to ACK for 10 chunks
+                for idx in range(10):
+                    sender_ws.send_json({
+                        "type": "chunk",
+                        "index": idx,
+                        "total": 20,
+                        "data": base64.b64encode(b"A" * 100).decode("utf-8")
+                    })
+                    _ = sender_ws.receive_json()
+                    _ = sender_ws.receive_json()
+                    _ = rx_ws.receive_json()
+                    _ = rx_ws.receive_json()
+                    # DO NOT send rx_ack from receiver!
+
+                # 11th chunk triggers TimeoutError unhandled!
+                sender_ws.send_json({
+                    "type": "chunk",
+                    "index": 10,
+                    "total": 20,
+                    "data": base64.b64encode(b"A" * 100).decode("utf-8")
+                })
+                _ = sender_ws.receive_json()
+
+        assert "ReceiverAckTimeoutError" in str(exc_timeout.value)

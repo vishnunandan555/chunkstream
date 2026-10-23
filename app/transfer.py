@@ -152,22 +152,6 @@ class ConnectionManager:
                     peer_count,
                 )
 
-                # Check if transfer was in progress and generate a real Python traceback for ProdPilot triage!
-                t_info = get_transfer(transfer_id)
-                is_active = t_info and t_info.get("status") in ("transferring", "pending")
-                if is_active:
-                    try:
-                        if role == "receiver":
-                            raise ConnectionResetError(
-                                f"ReceiverAbruptDisconnectError: Receiver connection lost mid-transfer for {transfer_id} (active peers: {peer_count})"
-                            )
-                        elif role == "sender":
-                            raise ConnectionResetError(
-                                f"SenderAbruptDisconnectError: Sender refreshed or severed socket during active transfer {transfer_id} (active peers: {peer_count})"
-                            )
-                    except Exception as exc:
-                        logger.exception("Transfer %s socket termination fault: %s", transfer_id, exc)
-
                 # Broadcast disconnect notification
                 asyncio.create_task(
                     self.broadcast(
@@ -199,19 +183,21 @@ class ConnectionManager:
         self, transfer_id: str, target_role: str, message: Dict[str, Any]
     ) -> None:
         if transfer_id not in self.active_connections:
-            return
+            raise BrokenPipeError(
+                f"BrokenPipeError: Transfer {transfer_id} has no active connections to deliver {message.get('type')}"
+            )
+        target_sockets = [
+            ws
+            for ws in self.active_connections[transfer_id]
+            if self.connection_meta.get(ws, {}).get("role") == target_role
+        ]
+        if not target_sockets:
+            raise BrokenPipeError(
+                f"ReceiverMissingError: No active {target_role} connection for transfer {transfer_id}"
+            )
         payload = json.dumps(message)
-        dead_sockets = []
-        for ws in self.active_connections[transfer_id]:
-            meta = self.connection_meta.get(ws, {})
-            if meta.get("role") == target_role:
-                try:
-                    await ws.send_text(payload)
-                except Exception:
-                    dead_sockets.append(ws)
-
-        for ws in dead_sockets:
-            self.disconnect(ws)
+        for ws in target_sockets:
+            await ws.send_text(payload)
 
     async def force_disconnect_role(self, transfer_id: str, target_role: str) -> int:
         """Forces disconnect on all sockets with given role (for F5 simulation)."""
@@ -278,46 +264,18 @@ async def handle_websocket_message(websocket: WebSocket, raw_message: str) -> No
             )
             return
 
-        # Check if receiver is online
+        # Check if receiver is online - raises BrokenPipeError for ProdPilot triage & tests
         if not manager.has_role(transfer_id, "receiver"):
-            try:
-                raise BrokenPipeError(
-                    f"ReceiverMissingError: Cannot relay chunk {chunk_index} for transfer {transfer_id} - receiver is disconnected or offline."
-                )
-            except Exception as exc:
-                logger.exception("Transfer %s streaming fault: %s", transfer_id, exc)
-
-            await websocket.send_text(
-                json.dumps(
-                    {
-                        "type": "error",
-                        "error_code": "NO_RECEIVER",
-                        "message": "Receiver disconnected! Transfer paused. Waiting for receiver...",
-                    }
-                )
+            raise BrokenPipeError(
+                f"ReceiverMissingError: Cannot relay chunk {chunk_index} for transfer {transfer_id} - receiver is disconnected or offline (Broken pipe)"
             )
-            return
 
-        # Check 10-chunk unacknowledged streak!
+        # Check 10-chunk unacknowledged streak - raises TimeoutError for ProdPilot triage & tests
         streak = manager.unacked_streak.get(transfer_id, 0)
         if streak >= 10:
-            try:
-                raise TimeoutError(
-                    f"ReceiverAckTimeoutError: Transfer {transfer_id} halted: 10 consecutive chunks sent without ACK from receiver (streak={streak})."
-                )
-            except Exception as exc:
-                logger.exception("Transfer %s halted on ACK timeout: %s", transfer_id, exc)
-
-            await websocket.send_text(
-                json.dumps(
-                    {
-                        "type": "error",
-                        "error_code": "ACK_TIMEOUT",
-                        "message": "Transfer halted: 10 chunks unacknowledged by receiver. Check receiver connection.",
-                    }
-                )
+            raise TimeoutError(
+                f"ReceiverAckTimeoutError: Transfer {transfer_id} halted: 10 consecutive chunks sent without ACK from receiver (streak={streak})"
             )
-            return
 
         # Increment unacknowledged streak
         manager.unacked_streak[transfer_id] = streak + 1
