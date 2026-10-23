@@ -93,6 +93,17 @@ class ConnectionManager:
         self.active_connections: Dict[str, Set[WebSocket]] = {}
         # websocket -> metadata dict {"transfer_id": str, "role": str}
         self.connection_meta: Dict[WebSocket, Dict[str, str]] = {}
+        # transfer_id -> count of chunks sent without receiver ACK
+        self.unacked_streak: Dict[str, int] = {}
+
+    def has_role(self, transfer_id: str, role: str) -> bool:
+        """Checks if at least one peer with the given role is actively connected."""
+        if transfer_id not in self.active_connections:
+            return False
+        return any(
+            self.connection_meta.get(ws, {}).get("role") == role
+            for ws in self.active_connections[transfer_id]
+        )
 
     async def connect(self, websocket: WebSocket, transfer_id: str, role: str) -> None:
         await websocket.accept()
@@ -107,6 +118,10 @@ class ConnectionManager:
             role,
             len(self.active_connections[transfer_id]),
         )
+
+        # Reset unacked streak when receiver joins
+        if role == "receiver":
+            self.unacked_streak[transfer_id] = 0
 
         # Notify peers of peer status
         await self.broadcast(
@@ -128,12 +143,31 @@ class ConnectionManager:
                 peer_count = len(self.active_connections[transfer_id])
                 if peer_count == 0:
                     del self.active_connections[transfer_id]
+                    self.unacked_streak.pop(transfer_id, None)
+
                 logger.info(
                     "WebSocket disconnected: transfer=%s, role=%s, remaining_peers=%d",
                     transfer_id,
                     role,
                     peer_count,
                 )
+
+                # Check if transfer was in progress and generate a real Python traceback for ProdPilot triage!
+                t_info = get_transfer(transfer_id)
+                is_active = t_info and t_info.get("status") in ("transferring", "pending")
+                if is_active:
+                    try:
+                        if role == "receiver":
+                            raise ConnectionResetError(
+                                f"ReceiverAbruptDisconnectError: Receiver connection lost mid-transfer for {transfer_id} (active peers: {peer_count})"
+                            )
+                        elif role == "sender":
+                            raise ConnectionResetError(
+                                f"SenderAbruptDisconnectError: Sender refreshed or severed socket during active transfer {transfer_id} (active peers: {peer_count})"
+                            )
+                    except Exception as exc:
+                        logger.exception("Transfer %s socket termination fault: %s", transfer_id, exc)
+
                 # Broadcast disconnect notification
                 asyncio.create_task(
                     self.broadcast(
@@ -142,6 +176,7 @@ class ConnectionManager:
                             "type": "peer_disconnected",
                             "role": role,
                             "peers_count": peer_count,
+                            "error": f"{role.capitalize()} disconnected mid-transfer.",
                         },
                     )
                 )
@@ -224,6 +259,12 @@ async def handle_websocket_message(websocket: WebSocket, raw_message: str) -> No
 
     msg_type = data.get("type")
 
+    # Receiver ACK received
+    if msg_type == "rx_ack":
+        # Reset unacknowledged streak!
+        manager.unacked_streak[transfer_id] = 0
+        return
+
     # 1. Chunk received from sender
     if msg_type == "chunk":
         chunk_index = data.get("index")
@@ -236,6 +277,50 @@ async def handle_websocket_message(websocket: WebSocket, raw_message: str) -> No
                 json.dumps({"type": "error", "message": "Missing chunk index or data"})
             )
             return
+
+        # Check if receiver is online
+        if not manager.has_role(transfer_id, "receiver"):
+            try:
+                raise BrokenPipeError(
+                    f"ReceiverMissingError: Cannot relay chunk {chunk_index} for transfer {transfer_id} - receiver is disconnected or offline."
+                )
+            except Exception as exc:
+                logger.exception("Transfer %s streaming fault: %s", transfer_id, exc)
+
+            await websocket.send_text(
+                json.dumps(
+                    {
+                        "type": "error",
+                        "error_code": "NO_RECEIVER",
+                        "message": "Receiver disconnected! Transfer paused. Waiting for receiver...",
+                    }
+                )
+            )
+            return
+
+        # Check 10-chunk unacknowledged streak!
+        streak = manager.unacked_streak.get(transfer_id, 0)
+        if streak >= 10:
+            try:
+                raise TimeoutError(
+                    f"ReceiverAckTimeoutError: Transfer {transfer_id} halted: 10 consecutive chunks sent without ACK from receiver (streak={streak})."
+                )
+            except Exception as exc:
+                logger.exception("Transfer %s halted on ACK timeout: %s", transfer_id, exc)
+
+            await websocket.send_text(
+                json.dumps(
+                    {
+                        "type": "error",
+                        "error_code": "ACK_TIMEOUT",
+                        "message": "Transfer halted: 10 chunks unacknowledged by receiver. Check receiver connection.",
+                    }
+                )
+            )
+            return
+
+        # Increment unacknowledged streak
+        manager.unacked_streak[transfer_id] = streak + 1
 
         # Check simulated failures
         if simulator.simulate_storage_error:

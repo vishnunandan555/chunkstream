@@ -327,7 +327,7 @@ async def crash_server():
     Emits critical log and terminates process after a brief delay so HTTP response flushes.
     """
     logger.critical(
-        "[FATAL CRASH TRIGGERED - F2] Simulated SIGSEGV / unhandled MemoryError in transfer engine"
+        "[FATAL CRASH TRIGGERED - F2] Simulated SIGSEGV / unhandled fatal exception in transfer engine"
     )
 
     def _delayed_exit():
@@ -336,6 +336,116 @@ async def crash_server():
 
     threading.Thread(target=_delayed_exit, daemon=True).start()
     return {"status": "crashing", "message": "Server exiting immediately with exit code 1 (F2)"}
+
+
+@app.post("/api/test/crash/deadlock", tags=["Simulation"])
+async def trigger_deadlock():
+    """
+    Simulates a thread deadlock that freezes worker threads and the event loop.
+    All subsequent health checks and requests will hang, triggering watchdog/healthcheck failure.
+    """
+    logger.critical(
+        "[DEADLOCK TRIGGERED] Simulating circular mutex deadlock between storage worker and network relay"
+    )
+
+    lock1 = threading.Lock()
+    lock2 = threading.Lock()
+
+    def _worker_1():
+        with lock1:
+            time.sleep(0.1)
+            with lock2:
+                pass
+
+    def _worker_2():
+        with lock2:
+            time.sleep(0.1)
+            with lock1:
+                pass
+
+    t1 = threading.Thread(target=_worker_1, daemon=True, name="deadlock_worker_1")
+    t2 = threading.Thread(target=_worker_2, daemon=True, name="deadlock_worker_2")
+    t1.start()
+    t2.start()
+
+    def _freeze_background():
+        time.sleep(0.5)
+        while True:
+            time.sleep(10)
+
+    threading.Thread(target=_freeze_background, daemon=True).start()
+
+    return {
+        "status": "deadlocked",
+        "message": "Deadlock created between lock1 and lock2. Worker threads are frozen.",
+    }
+
+
+@app.post("/api/test/crash/oom", tags=["Simulation"])
+async def trigger_oom():
+    """
+    Simulates Out-Of-Memory (OOM) by rapidly exhausting process memory in a background thread,
+    triggering MemoryError or container OOM-killer (SIGKILL 137).
+    """
+    logger.critical("[OOM TRIGGERED] Rapid heap memory allocation loop started to trigger OOM/SIGKILL")
+
+    def _alloc_loop():
+        time.sleep(0.2)
+        blobs = []
+        try:
+            while True:
+                blobs.append(bytearray(64 * 1024 * 1024))
+        except MemoryError:
+            logger.critical("Process MemoryError: Heap allocation limit exceeded, exiting process")
+            os._exit(137)
+
+    threading.Thread(target=_alloc_loop, daemon=True).start()
+    return {"status": "oom_initiated", "message": "Rapid memory allocation started; container will crash shortly"}
+
+
+@app.post("/api/test/error", tags=["Simulation"])
+async def trigger_runtime_error(error_type: str = Query("key_error", alias="type")):
+    """
+    Triggers realistic program errors/exceptions that log full tracebacks to stdout/Render/ProdPilot
+    while the server remains running.
+    Available types:
+      - key_error: KeyError in transfer dictionary lookup
+      - type_error: TypeError in chunk offset arithmetic
+      - db_lock: sqlite3.OperationalError (database is locked)
+      - ack_timeout: TimeoutError (ReceiverAckTimeoutError)
+      - storage_full: OSError (No space left on device)
+      - broken_pipe: BrokenPipeError (ReceiverMissingError)
+    """
+    try:
+        if error_type == "key_error":
+            data = {"transfer_id": "9999"}
+            _ = data["non_existent_chunk_hash_table"]
+        elif error_type == "type_error":
+            offset = None
+            _ = offset + 262144
+        elif error_type == "db_lock":
+            import sqlite3
+            raise sqlite3.OperationalError("database is locked (Simulated concurrent lock contention on chunks.db)")
+        elif error_type == "ack_timeout":
+            raise TimeoutError("ReceiverAckTimeoutError: Transfer 9999 halted: 10 consecutive chunks sent without ACK from receiver")
+        elif error_type == "storage_full":
+            raise OSError(28, "No space left on device: '/data/downloads/9999/chunk_0042.part'")
+        elif error_type == "broken_pipe":
+            raise BrokenPipeError("ReceiverMissingError: Cannot relay chunk 42 for transfer 9999 - receiver connection broken")
+        else:
+            raise ValueError(f"Unknown simulated error type '{error_type}'")
+    except Exception as exc:
+        logger.exception("Simulated runtime program error (%s): %s", error_type, exc)
+        return JSONResponse(
+            status_code=500,
+            content={
+                "status": "error_logged",
+                "error_type": error_type,
+                "exception": type(exc).__name__,
+                "message": str(exc),
+                "server_running": True,
+            },
+        )
 
 
 # --- WebSocket Endpoint (Phase 1, Phase 2, Phase 3) ---

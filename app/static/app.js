@@ -117,6 +117,7 @@ const senderSpeed = document.getElementById('sender-speed');
 const senderProgressDetails = document.getElementById('sender-progress-details');
 const senderChunkDetails = document.getElementById('sender-chunk-details');
 const btnSendAgain = document.getElementById('btn-send-again');
+const btnResumeSend = document.getElementById('btn-resume-send');
 
 // Receiver Elements
 const receiverStepInput = document.getElementById('receiver-step-input');
@@ -262,13 +263,31 @@ function connectSenderWebSocket() {
       const msg = JSON.parse(e.data);
       // Transfer ONLY starts when receiver connects and requests chunks!
       if (msg.type === 'peer_connected' && msg.role === 'receiver') {
+        if (btnResumeSend) btnResumeSend.classList.add('hidden');
         startStreamingChunks(null, msg.peer_name);
       } else if (msg.type === 'request_missing' || msg.type === 'receiver_ready') {
+        if (btnResumeSend) btnResumeSend.classList.add('hidden');
         startStreamingChunks(msg.missing_chunks, msg.peer_name);
       } else if (msg.type === 'peer_info' && msg.role === 'receiver') {
         senderStatusSub.textContent = `Connected to ${msg.peer_name || 'receiver'}`;
       } else if (msg.type === 'chunk_ack') {
         handleChunkAck(msg.index);
+      } else if (msg.type === 'error') {
+        isStreaming = false;
+        senderStatusDot.className = 'pulse-dot red';
+        senderStatusText.textContent = `⚠️ ${msg.message || 'Transfer paused'}`;
+        senderStatusSub.textContent = msg.error_code === 'ACK_TIMEOUT'
+          ? 'Transfer halted: 10 chunks unacknowledged by receiver. Check receiver connection.'
+          : 'Transfer paused: Receiver disconnected or offline.';
+        if (btnResumeSend) btnResumeSend.classList.remove('hidden');
+      } else if (msg.type === 'peer_disconnected') {
+        if (msg.role === 'receiver') {
+          isStreaming = false;
+          senderStatusDot.className = 'pulse-dot red';
+          senderStatusText.textContent = '⚠️ Receiver disconnected';
+          senderStatusSub.textContent = 'Transfer paused mid-stream. Waiting for receiver to reconnect.';
+          if (btnResumeSend) btnResumeSend.classList.remove('hidden');
+        }
       }
     } catch (err) {
       console.warn("Sender WS error:", err);
@@ -280,6 +299,7 @@ function startStreamingChunks(missing, peerName) {
   if (peerName) {
     senderStatusSub.textContent = `Connected to ${peerName}`;
   }
+  if (btnResumeSend) btnResumeSend.classList.add('hidden');
   if (isStreaming) {
     if (missing && missing.length > 0) {
       streamFileChunks(missing);
@@ -304,12 +324,18 @@ async function streamFileChunks(missingList) {
     : Array.from({ length: totalChunks }, (_, i) => i);
 
   for (const idx of chunksToSend) {
+    if (!isStreaming) {
+      console.warn("Transfer paused or stopped, exiting streamFileChunks loop.");
+      break;
+    }
     if (ackedChunks.has(idx)) continue;
 
     // Concurrency limit
     while (inFlightChunks.size >= 3) {
+      if (!isStreaming) break;
       await new Promise(r => setTimeout(r, 20));
     }
+    if (!isStreaming) break;
 
     inFlightChunks.add(idx);
     const start = idx * chunkSize;
@@ -370,12 +396,31 @@ function resetSender() {
     senderWs.close();
     senderWs = null;
   }
+  if (btnResumeSend) btnResumeSend.classList.add('hidden');
   currentFile = null;
   currentCode = null;
   isStreaming = false;
   senderStepPick.classList.remove('hidden');
   senderStepTransfer.classList.add('hidden');
   fileInput.value = '';
+}
+
+if (btnResumeSend) {
+  btnResumeSend.addEventListener('click', async () => {
+    btnResumeSend.classList.add('hidden');
+    senderStatusText.textContent = 'Resuming transfer...';
+    senderStatusSub.textContent = 'Checking missing chunks with server...';
+    senderStatusDot.className = 'pulse-dot green';
+    try {
+      const res = await fetch(`/api/transfers/${currentCode}`);
+      if (res.ok) {
+        const info = await res.json();
+        startStreamingChunks(info.missing_chunks);
+      }
+    } catch (err) {
+      console.error('Resume error:', err);
+    }
+  });
 }
 
 // ----------------------------------------------------
@@ -444,7 +489,22 @@ function connectReceiverWebSocket(code, transferData) {
       const msg = JSON.parse(e.data);
       if (msg.type === 'peer_info' && msg.role === 'sender') {
         rxStatusSub.textContent = `Receiving from ${msg.peer_name || 'sender'}`;
+      } else if (msg.type === 'peer_connected' && msg.role === 'sender') {
+        const rxDot = document.getElementById('rx-status-dot');
+        if (rxDot) rxDot.className = 'pulse-dot green';
+        rxStatusText.textContent = 'Receiving file...';
+        rxStatusSub.textContent = `Sender connected (${msg.peer_name || 'sender'})`;
+      } else if (msg.type === 'peer_disconnected' && msg.role === 'sender') {
+        const rxDot = document.getElementById('rx-status-dot');
+        if (rxDot) rxDot.className = 'pulse-dot red';
+        rxStatusText.textContent = '⚠️ Sender disconnected';
+        rxStatusSub.textContent = 'Transfer paused mid-stream. Waiting for sender...';
       } else if (msg.type === 'chunk_data') {
+        // Send ACK back to server immediately!
+        if (receiverWs && receiverWs.readyState === WebSocket.OPEN) {
+          receiverWs.send(JSON.stringify({ type: 'rx_ack', index: msg.index }));
+        }
+
         receivedChunks.add(msg.index);
         rxBytesReceived = Math.min(receivedChunks.size * transferData.chunk_size, transferData.filesize);
 
