@@ -706,6 +706,14 @@ async def transfer_websocket(
                     done_chunks,
                     total_chunks,
                 )
+    except ZeroDivisionError as exc:
+        logger.critical(
+            "FATAL APPLICATION CRASH: Unhandled ZeroDivisionError in transfer engine throughput calculation for transfer %s: %s",
+            transfer_id,
+            exc,
+            exc_info=True,
+        )
+        os._exit(1)
     except Exception as exc:
         logger.exception(
             "CRITICAL Unhandled Exception in WebSocket transfer=%s role=%s: %s",

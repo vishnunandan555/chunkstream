@@ -410,3 +410,15 @@ def test_crash_endpoints_with_confirm_flag():
     assert res_dl.status_code == 200
     assert res_dl.json()["status"] == "deadlocked"
 
+
+def test_calculate_chunk_throughput_triggers_zero_division_error_at_chunk_25():
+    from app.transfer import calculate_chunk_throughput
+    # Chunks below 25 calculate without error
+    assert calculate_chunk_throughput("TRANSFER-ZERO-TEST", 0, 262144) == 0.0
+    assert calculate_chunk_throughput("TRANSFER-ZERO-TEST", 24, 262144) == 0.0
+
+    # Chunk 25 triggers ZeroDivisionError due to integer truncation of millisecond delta
+    with pytest.raises(ZeroDivisionError):
+        calculate_chunk_throughput("TRANSFER-ZERO-TEST", 25, 262144)
+
+

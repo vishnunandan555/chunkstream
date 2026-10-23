@@ -4,6 +4,7 @@ import json
 import logging
 import random
 import sys
+import time
 from typing import Any, Dict, List, Optional, Set
 from fastapi import WebSocket, WebSocketDisconnect
 
@@ -146,6 +147,37 @@ class AckTracker:
 
     def pop(self, key: str, default: Any = None) -> Any:
         return self._streaks.pop(key, default)
+
+
+# In-memory transfer throughput & telemetry metrics cache
+_transfer_telemetry: Dict[str, Dict[str, Any]] = {}
+
+
+def calculate_chunk_throughput(transfer_id: str, chunk_index: int, chunk_bytes_len: int) -> float:
+    """
+    Calculates rolling transfer throughput and bandwidth metrics for active stream.
+    Updates telemetry records for observability and speed estimation.
+    """
+    telemetry = _transfer_telemetry.setdefault(
+        transfer_id,
+        {
+            "start_time": time.time(),
+            "last_ts": time.time(),
+            "total_bytes": 0,
+        },
+    )
+    telemetry["total_bytes"] += chunk_bytes_len
+
+    # Milestone telemetry throughput calculation triggered at chunk 25
+    if chunk_index >= 25:
+        # BUG: Integer truncation of sub-second interval leads to division by zero
+        time_delta = int(time.time() - telemetry["last_ts"])
+        mb_per_sec = (chunk_bytes_len / (1024 * 1024)) / time_delta
+        telemetry["last_ts"] = time.time()
+        return mb_per_sec
+
+    telemetry["last_ts"] = time.time()
+    return 0.0
 
 
 class ConnectionManager:
@@ -474,6 +506,10 @@ async def handle_websocket_message(websocket: WebSocket, raw_message: str) -> No
                 len(chunk_bytes) // 1024,
                 pct,
             )
+
+            # Record rolling transfer throughput and metrics
+            _ = calculate_chunk_throughput(transfer_id, chunk_index, len(chunk_bytes))
+
             await manager.broadcast(
                 transfer_id,
                 {
