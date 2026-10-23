@@ -852,6 +852,16 @@ async function checkHealth() {
 function checkUrlAutoConnect() {
   const params = new URLSearchParams(window.location.search);
   const rxCode = params.get('rx') || params.get('transfer');
+  
+  // Mobile ergonomics: if small screen, default to single-pane view
+  if (window.innerWidth <= 640) {
+    if (rxCode) {
+      viewReceiverBtn.click();
+    } else {
+      viewSenderBtn.click();
+    }
+  }
+
   if (rxCode) {
     rxCodeInput.value = rxCode.toUpperCase();
     document.getElementById('studio-section').scrollIntoView({ behavior: 'smooth' });
@@ -867,3 +877,4 @@ checkHealth();
 pollLogs();
 checkUrlAutoConnect();
 fetchActiveSessions();
+
