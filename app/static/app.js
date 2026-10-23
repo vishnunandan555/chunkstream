@@ -1,6 +1,6 @@
 // ChunkStream Frontend Application Logic
 
-// State
+// Global State
 let selectedFile = null;
 let currentTransferId = null;
 let senderWs = null;
@@ -19,9 +19,8 @@ let transferStartTime = 0;
 let rxTransferId = null;
 let rxChunksReceived = new Set();
 let rxTotalChunks = 0;
-let rxAssembledParts = {};
 
-// Helpers
+// Format utilities
 function formatBytes(bytes) {
   if (bytes === 0) return '0 B';
   const k = 1024;
@@ -39,7 +38,6 @@ function generateRandomCode() {
   return result;
 }
 
-// SHA-256 for browser
 async function computeSha256(arrayBuffer) {
   const hashBuffer = await crypto.subtle.digest('SHA-256', arrayBuffer);
   const hashArray = Array.from(new Uint8Array(hashBuffer));
@@ -56,70 +54,121 @@ function arrayBufferToBase64(buffer) {
   return window.btoa(binary);
 }
 
-// DOM Elements
-const tabBtns = document.querySelectorAll('.nav-tab');
-const tabPanels = document.querySelectorAll('.tab-panel');
-const healthIndicator = document.getElementById('health-indicator');
-const healthText = document.getElementById('health-text');
-const incidentStatusIndicator = document.getElementById('incident-status-indicator');
-
-// Tab Navigation
-tabBtns.forEach(btn => {
+// -------------------------------------------------------------------------
+// TOP NAVIGATION & SCROLLING
+// -------------------------------------------------------------------------
+const navItems = document.querySelectorAll('.nav-item');
+navItems.forEach(btn => {
   btn.addEventListener('click', () => {
-    const targetTab = btn.getAttribute('data-tab');
-    tabBtns.forEach(b => b.classList.remove('active'));
-    tabPanels.forEach(p => p.classList.remove('active'));
+    navItems.forEach(b => b.classList.remove('active'));
     btn.classList.add('active');
-    document.getElementById(`panel-${targetTab}`).classList.add('active');
-    if (targetTab === 'receiver') {
-      fetchActiveTransfers();
+    const targetId = btn.getAttribute('data-target');
+    const targetEl = document.getElementById(targetId);
+    if (targetEl) {
+      targetEl.scrollIntoView({ behavior: 'smooth' });
     }
   });
 });
 
-// ----------------------------------------------------
-// SENDER LOGIC
-// ----------------------------------------------------
-const senderDropZone = document.getElementById('sender-drop-zone');
-const senderFileInput = document.getElementById('sender-file-input');
-const fileSummaryBox = document.getElementById('file-summary-box');
-const selectedFileName = document.getElementById('selected-file-name');
-const selectedFileSize = document.getElementById('selected-file-size');
-const chunkSizeSelect = document.getElementById('chunk-size-select');
-const chunkCalcText = document.getElementById('chunk-calc-text');
-const transferIdInput = document.getElementById('transfer-id-input');
-const copyTransferIdBtn = document.getElementById('copy-transfer-id-btn');
-const regenTransferIdBtn = document.getElementById('regen-transfer-id-btn');
-const btnStartTransfer = document.getElementById('btn-start-transfer');
-const btnPauseTransfer = document.getElementById('btn-pause-transfer');
-const btnResumeTransfer = document.getElementById('btn-resume-transfer');
-const senderProgressBar = document.getElementById('sender-progress-bar');
-const senderProgressPct = document.getElementById('sender-progress-pct');
-const senderChunksAcked = document.getElementById('sender-chunks-acked');
-const senderSpeed = document.getElementById('sender-speed');
-const senderRetries = document.getElementById('sender-retries');
-const senderStatusBadge = document.getElementById('sender-status-badge');
-const senderChunkGrid = document.getElementById('sender-chunk-grid');
+// Studio View Switchers
+const studioGrid = document.getElementById('studio-grid');
+const viewSplitBtn = document.getElementById('view-split-btn');
+const viewSenderBtn = document.getElementById('view-sender-btn');
+const viewReceiverBtn = document.getElementById('view-receiver-btn');
 
-// Initialize Transfer Code
-currentTransferId = generateRandomCode();
-transferIdInput.value = currentTransferId;
-
-regenTransferIdBtn.addEventListener('click', () => {
-  if (isSending) return;
-  currentTransferId = generateRandomCode();
-  transferIdInput.value = currentTransferId;
+viewSplitBtn.addEventListener('click', () => {
+  studioGrid.className = 'studio-grid';
+  viewSplitBtn.classList.add('active');
+  viewSenderBtn.classList.remove('active');
+  viewReceiverBtn.classList.remove('active');
 });
 
-copyTransferIdBtn.addEventListener('click', () => {
-  navigator.clipboard.writeText(transferIdInput.value).then(() => {
-    copyTransferIdBtn.textContent = 'Copied!';
-    setTimeout(() => copyTransferIdBtn.textContent = 'Copy', 1500);
+viewSenderBtn.addEventListener('click', () => {
+  studioGrid.className = 'studio-grid show-sender-only';
+  viewSenderBtn.classList.add('active');
+  viewSplitBtn.classList.remove('active');
+  viewReceiverBtn.classList.remove('active');
+});
+
+viewReceiverBtn.addEventListener('click', () => {
+  studioGrid.className = 'studio-grid show-receiver-only';
+  viewReceiverBtn.classList.add('active');
+  viewSplitBtn.classList.remove('active');
+  viewSenderBtn.classList.remove('active');
+  fetchActiveSessions();
+});
+
+// Hero Buttons
+document.getElementById('btn-hero-sample').addEventListener('click', () => {
+  generateSampleFileAndSelect();
+  document.getElementById('studio-section').scrollIntoView({ behavior: 'smooth' });
+});
+
+document.getElementById('btn-hero-chaos').addEventListener('click', () => {
+  document.getElementById('chaos-section').scrollIntoView({ behavior: 'smooth' });
+});
+
+// -------------------------------------------------------------------------
+// SENDER LOGIC
+// -------------------------------------------------------------------------
+const senderDropZone = document.getElementById('sender-drop-zone');
+const senderFileInput = document.getElementById('sender-file-input');
+const fileMetaBar = document.getElementById('file-meta-bar');
+const selectedFileName = document.getElementById('selected-file-name');
+const selectedFileSize = document.getElementById('selected-file-size');
+const selectedFileHash = document.getElementById('selected-file-hash');
+const btnClearFile = document.getElementById('btn-clear-file');
+const chunkSizeSelect = document.getElementById('chunk-size-select');
+const chunkCountPreview = document.getElementById('chunk-count-preview');
+const transferCodeInput = document.getElementById('transfer-code-input');
+const btnNewCode = document.getElementById('btn-new-code');
+const btnCopyCode = document.getElementById('btn-copy-code');
+const btnShareLink = document.getElementById('btn-share-link');
+const btnQuickSampleFile = document.getElementById('btn-quick-sample-file');
+
+const btnStartStream = document.getElementById('btn-start-stream');
+const btnPauseStream = document.getElementById('btn-pause-stream');
+const btnResumeStream = document.getElementById('btn-resume-stream');
+
+const senderStatusChip = document.getElementById('sender-status-chip');
+const senderPct = document.getElementById('sender-pct');
+const senderChunksCount = document.getElementById('sender-chunks-count');
+const senderSpeedVal = document.getElementById('sender-speed-val');
+const senderRetriesCount = document.getElementById('sender-retries-count');
+const senderProgressFill = document.getElementById('sender-progress-fill');
+const senderChunkViewport = document.getElementById('sender-chunk-viewport');
+
+// Initialize Session Code
+currentTransferId = generateRandomCode();
+transferCodeInput.value = currentTransferId;
+
+btnNewCode.addEventListener('click', () => {
+  if (isSending) return;
+  currentTransferId = generateRandomCode();
+  transferCodeInput.value = currentTransferId;
+});
+
+btnCopyCode.addEventListener('click', () => {
+  navigator.clipboard.writeText(transferCodeInput.value).then(() => {
+    btnCopyCode.textContent = 'Copied!';
+    setTimeout(() => btnCopyCode.textContent = 'Copy', 1500);
   });
 });
 
-// File Selection & Drag-and-Drop
-senderDropZone.addEventListener('click', () => senderFileInput.click());
+btnShareLink.addEventListener('click', () => {
+  const shareUrl = `${window.location.origin}/?rx=${transferCodeInput.value}`;
+  navigator.clipboard.writeText(shareUrl).then(() => {
+    btnShareLink.textContent = 'Link Copied!';
+    setTimeout(() => btnShareLink.textContent = 'Share Link', 1500);
+  });
+});
+
+// Drop Zone Actions
+senderDropZone.addEventListener('click', (e) => {
+  if (e.target !== btnQuickSampleFile && !btnQuickSampleFile.contains(e.target)) {
+    senderFileInput.click();
+  }
+});
 
 senderDropZone.addEventListener('dragover', (e) => {
   e.preventDefault();
@@ -144,6 +193,57 @@ senderFileInput.addEventListener('change', (e) => {
   }
 });
 
+btnClearFile.addEventListener('click', () => {
+  selectedFile = null;
+  fileMetaBar.classList.add('hidden');
+  senderDropZone.classList.remove('hidden');
+  btnStartStream.disabled = true;
+  senderChunkViewport.innerHTML = '<div class="viewport-placeholder">Select or generate a file to initialize chunk blocks</div>';
+  senderPct.textContent = '0%';
+  senderProgressFill.style.width = '0%';
+  senderChunksCount.textContent = '0 / 0';
+  chunkCountPreview.textContent = '0 chunks';
+});
+
+btnQuickSampleFile.addEventListener('click', (e) => {
+  e.stopPropagation();
+  generateSampleFileAndSelect();
+});
+
+function generateSampleFileAndSelect() {
+  const sampleSize = 2 * 1024 * 1024; // 2 MB
+  const buffer = new Uint8Array(sampleSize);
+  // Fill with repeated identifiable pattern
+  for (let i = 0; i < sampleSize; i++) {
+    buffer[i] = (i % 256) ^ 0x5a;
+  }
+  const blob = new Blob([buffer], { type: 'application/octet-stream' });
+  const file = new File([blob], 'demo_payload_2mb.bin', { type: 'application/octet-stream' });
+  handleFileSelect(file);
+}
+
+async function handleFileSelect(file) {
+  selectedFile = file;
+  selectedFileName.textContent = file.name;
+  selectedFileSize.textContent = formatBytes(file.size);
+  selectedFileHash.textContent = 'Computing SHA-256...';
+
+  senderDropZone.classList.add('hidden');
+  fileMetaBar.classList.remove('hidden');
+  btnStartStream.disabled = false;
+
+  recalcChunks();
+
+  // Compute file preview hash
+  try {
+    const previewBuffer = await file.slice(0, Math.min(file.size, 5 * 1024 * 1024)).arrayBuffer();
+    const hash = await computeSha256(previewBuffer);
+    selectedFileHash.textContent = `SHA-256: ${hash.slice(0, 12)}...`;
+  } catch (err) {
+    selectedFileHash.textContent = 'Hash ready';
+  }
+}
+
 chunkSizeSelect.addEventListener('change', (e) => {
   senderChunkSize = parseInt(e.target.value, 10);
   if (selectedFile) {
@@ -151,74 +251,65 @@ chunkSizeSelect.addEventListener('change', (e) => {
   }
 });
 
-function handleFileSelect(file) {
-  selectedFile = file;
-  selectedFileName.textContent = file.name;
-  selectedFileSize.textContent = formatBytes(file.size);
-  fileSummaryBox.classList.remove('hidden');
-  btnStartTransfer.disabled = false;
-  recalcChunks();
-}
-
 function recalcChunks() {
   totalChunks = Math.ceil(selectedFile.size / senderChunkSize);
-  chunkCalcText.textContent = `${totalChunks} chunks planned`;
-  buildSenderChunkGrid(totalChunks);
+  chunkCountPreview.textContent = `${totalChunks} chunks`;
+  buildSenderChunkMatrix(totalChunks);
 }
 
-function buildSenderChunkGrid(count) {
-  senderChunkGrid.innerHTML = '';
+function buildSenderChunkMatrix(count) {
+  senderChunkViewport.innerHTML = '';
   ackedChunks.clear();
   inFlightChunks.clear();
   failedChunks.clear();
 
   for (let i = 0; i < count; i++) {
     const block = document.createElement('div');
-    block.className = 'chunk-block';
+    block.className = 'chunk-unit';
     block.id = `sender-chunk-${i}`;
     block.title = `Chunk #${i}`;
-    senderChunkGrid.appendChild(block);
+    senderChunkViewport.appendChild(block);
   }
-  senderChunksAcked.textContent = `0 / ${count}`;
-  senderProgressPct.textContent = '0%';
-  senderProgressBar.style.width = '0%';
+  senderChunksCount.textContent = `0 / ${count}`;
+  senderPct.textContent = '0%';
+  senderProgressFill.style.width = '0%';
 }
 
-function updateChunkBlock(index, status) {
+function setSenderChunkState(index, stateClass) {
   const el = document.getElementById(`sender-chunk-${index}`);
   if (!el) return;
-  el.className = `chunk-block status-${status}`;
+  el.className = `chunk-unit state-${stateClass}`;
 }
 
-// Start Transfer
-btnStartTransfer.addEventListener('click', async () => {
+// Start Stream
+btnStartStream.addEventListener('click', async () => {
   if (!selectedFile || isSending) return;
 
-  btnStartTransfer.disabled = true;
-  btnPauseTransfer.disabled = false;
-  btnResumeTransfer.disabled = true;
+  btnStartStream.disabled = true;
+  btnPauseStream.disabled = false;
+  btnResumeStream.disabled = true;
   chunkSizeSelect.disabled = true;
-  senderFileInput.disabled = true;
+  btnClearFile.disabled = true;
   isSending = true;
   isSenderPaused = false;
   retryCount = 0;
-  senderRetries.textContent = '0';
+  senderRetriesCount.textContent = '0';
   bytesSentTotal = 0;
   transferStartTime = Date.now();
 
-  senderStatusBadge.textContent = 'CONNECTING';
-  senderStatusBadge.className = 'status-badge status-active';
+  senderStatusChip.textContent = 'CONNECTING';
+  senderStatusChip.className = 'status-chip status-active';
 
-  // 1. Compute whole-file hash if small/medium or quick init
-  let fileHash = '';
+  // 1. Whole file preview hash
+  let previewHash = '';
   try {
-    const fileBuffer = await selectedFile.slice(0, Math.min(selectedFile.size, 5 * 1024 * 1024)).arrayBuffer();
-    fileHash = await computeSha256(fileBuffer);
-  } catch (err) {
-    console.warn("Could not compute preview hash:", err);
+    const buffer = await selectedFile.slice(0, Math.min(selectedFile.size, 5 * 1024 * 1024)).arrayBuffer();
+    previewHash = await computeSha256(buffer);
+  } catch (e) {
+    console.warn("Could not compute hash:", e);
   }
 
-  // 2. Initialize transfer metadata on backend
+  // 2. Initialize transfer session on server
   try {
     const res = await fetch('/api/transfers', {
       method: 'POST',
@@ -230,13 +321,13 @@ btnStartTransfer.addEventListener('click', async () => {
         chunk_size: senderChunkSize,
         total_chunks: totalChunks,
         mime_type: selectedFile.type || 'application/octet-stream',
-        checksum: fileHash
+        checksum: previewHash
       })
     });
-    if (!res.ok) throw new Error('Failed to create transfer session on server');
+    if (!res.ok) throw new Error('Failed to register transfer on server');
   } catch (e) {
-    alert(`Transfer initialization error: ${e.message}`);
-    btnStartTransfer.disabled = false;
+    alert(`Transfer registration error: ${e.message}`);
+    btnStartStream.disabled = false;
     isSending = false;
     return;
   }
@@ -252,8 +343,8 @@ function connectSenderWebSocket() {
   senderWs = new WebSocket(wsUrl);
 
   senderWs.onopen = () => {
-    senderStatusBadge.textContent = 'STREAMING';
-    senderStatusBadge.className = 'status-badge status-active';
+    senderStatusChip.textContent = 'STREAMING';
+    senderStatusChip.className = 'status-chip status-active';
     streamChunks();
   };
 
@@ -262,15 +353,15 @@ function connectSenderWebSocket() {
       const msg = JSON.parse(event.data);
       handleSenderSocketMessage(msg);
     } catch (e) {
-      console.error("Invalid message received:", e);
+      console.error("Message parse error:", e);
     }
   };
 
   senderWs.onclose = () => {
     if (isSending && !isSenderPaused) {
-      senderStatusBadge.textContent = 'DISCONNECTED';
-      senderStatusBadge.className = 'status-badge status-error';
-      btnResumeTransfer.disabled = false;
+      senderStatusChip.textContent = 'DISCONNECTED';
+      senderStatusChip.className = 'status-chip status-error';
+      btnResumeStream.disabled = false;
     }
   };
 }
@@ -280,42 +371,40 @@ function handleSenderSocketMessage(msg) {
     const idx = msg.index;
     inFlightChunks.delete(idx);
     ackedChunks.add(idx);
-    updateChunkBlock(idx, 'acked');
+    setSenderChunkState(idx, 'acked');
 
     const pct = Math.round((ackedChunks.size / totalChunks) * 100);
-    senderProgressPct.textContent = `${pct}%`;
-    senderProgressBar.style.width = `${pct}%`;
-    senderChunksAcked.textContent = `${ackedChunks.size} / ${totalChunks}`;
+    senderPct.textContent = `${pct}%`;
+    senderProgressFill.style.width = `${pct}%`;
+    senderChunksCount.textContent = `${ackedChunks.size} / ${totalChunks}`;
 
     // Speed calculation
     const elapsedSec = (Date.now() - transferStartTime) / 1000;
-    if (elapsedSec > 0.5) {
+    if (elapsedSec > 0.4) {
       const mbps = ((bytesSentTotal / (1024 * 1024)) / elapsedSec).toFixed(2);
-      senderSpeed.textContent = `${mbps} MB/s`;
+      senderSpeedVal.textContent = `${mbps} MB/s`;
     }
 
     if (ackedChunks.size === totalChunks) {
-      finishTransfer();
+      finishSenderTransfer();
     }
   } else if (msg.type === 'chunk_error') {
     const idx = msg.index;
     inFlightChunks.delete(idx);
     failedChunks.add(idx);
     retryCount++;
-    senderRetries.textContent = retryCount;
-    updateChunkBlock(idx, 'failed');
+    senderRetriesCount.textContent = retryCount;
+    setSenderChunkState(idx, 'failed');
 
-    // Auto-retry dropped chunk if retryable
     if (msg.retryable && !isSenderPaused) {
       setTimeout(() => {
         if (!ackedChunks.has(idx) && !isSenderPaused) {
           sendSingleChunk(idx);
         }
-      }, 600);
+      }, 500);
     }
   } else if (msg.type === 'request_missing') {
     const missing = msg.missing_chunks || [];
-    console.log("Peer requested missing chunks:", missing);
     missing.forEach(idx => {
       if (!ackedChunks.has(idx)) {
         sendSingleChunk(idx);
@@ -329,15 +418,14 @@ async function streamChunks() {
     if (isSenderPaused || !isSending) break;
     if (ackedChunks.has(i)) continue;
 
-    // Concurrency throttle
+    // Sliding window of 3 chunks in-flight
     while (inFlightChunks.size >= 3 && !isSenderPaused) {
-      await new Promise(r => setTimeout(r, 40));
+      await new Promise(r => setTimeout(r, 30));
     }
 
     if (isSenderPaused) break;
     sendSingleChunk(i);
-    // Slight throttle for smooth visualization
-    await new Promise(r => setTimeout(r, 25));
+    await new Promise(r => setTimeout(r, 20));
   }
 }
 
@@ -346,7 +434,7 @@ async function sendSingleChunk(index) {
   if (ackedChunks.has(index)) return;
 
   inFlightChunks.add(index);
-  updateChunkBlock(index, 'sending');
+  setSenderChunkState(index, 'sending');
 
   const start = index * senderChunkSize;
   const end = Math.min(start + senderChunkSize, selectedFile.size);
@@ -366,33 +454,34 @@ async function sendSingleChunk(index) {
   }));
 }
 
-function finishTransfer() {
+function finishSenderTransfer() {
   isSending = false;
-  senderStatusBadge.textContent = 'COMPLETED';
-  senderStatusBadge.className = 'status-badge status-success';
-  btnPauseTransfer.disabled = true;
-  btnResumeTransfer.disabled = true;
+  senderStatusChip.textContent = 'COMPLETED';
+  senderStatusChip.className = 'status-chip status-success';
+  btnPauseStream.disabled = true;
+  btnResumeStream.disabled = true;
+  btnClearFile.disabled = false;
 
   if (senderWs && senderWs.readyState === WebSocket.OPEN) {
     senderWs.send(JSON.stringify({ type: 'complete' }));
   }
 }
 
-btnPauseTransfer.addEventListener('click', () => {
+btnPauseStream.addEventListener('click', () => {
   isSenderPaused = true;
-  senderStatusBadge.textContent = 'PAUSED';
-  senderStatusBadge.className = 'status-badge status-idle';
-  btnPauseTransfer.disabled = true;
-  btnResumeTransfer.disabled = false;
+  senderStatusChip.textContent = 'PAUSED';
+  senderStatusChip.className = 'status-chip status-idle';
+  btnPauseStream.disabled = true;
+  btnResumeStream.disabled = false;
 });
 
-btnResumeTransfer.addEventListener('click', () => {
+btnResumeStream.addEventListener('click', () => {
   isSenderPaused = false;
   isSending = true;
-  senderStatusBadge.textContent = 'RESUMING';
-  senderStatusBadge.className = 'status-badge status-active';
-  btnPauseTransfer.disabled = false;
-  btnResumeTransfer.disabled = true;
+  senderStatusChip.textContent = 'RESUMING';
+  senderStatusChip.className = 'status-chip status-active';
+  btnPauseStream.disabled = false;
+  btnResumeStream.disabled = true;
 
   if (!senderWs || senderWs.readyState !== WebSocket.OPEN) {
     connectSenderWebSocket();
@@ -401,89 +490,87 @@ btnResumeTransfer.addEventListener('click', () => {
   }
 });
 
-// ----------------------------------------------------
+// -------------------------------------------------------------------------
 // RECEIVER LOGIC
-// ----------------------------------------------------
-const rxTransferIdInput = document.getElementById('rx-transfer-id-input');
-const rxConnectBtn = document.getElementById('rx-connect-btn');
-const activeTransfersList = document.getElementById('active-transfers-list');
-const refreshTransfersBtn = document.getElementById('refresh-transfers-btn');
-const rxMetadataCard = document.getElementById('rx-metadata-card');
-const rxMetaFilename = document.getElementById('rx-meta-filename');
-const rxMetaFilesize = document.getElementById('rx-meta-filesize');
-const rxMetaTotalChunks = document.getElementById('rx-meta-total-chunks');
-const rxMetaStatus = document.getElementById('rx-meta-status');
-const rxDisconnectBtn = document.getElementById('rx-disconnect-btn');
-const rxResumeBtn = document.getElementById('rx-resume-btn');
-const rxDownloadBtn = document.getElementById('rx-download-btn');
-const rxStatusBadge = document.getElementById('rx-status-badge');
-const rxProgressPct = document.getElementById('rx-progress-pct');
+// -------------------------------------------------------------------------
+const rxCodeInput = document.getElementById('rx-code-input');
+const btnRxConnect = document.getElementById('btn-rx-connect');
+const activeSessionsChips = document.getElementById('active-sessions-chips');
+const btnRefreshSessions = document.getElementById('btn-refresh-sessions');
+const rxInfoBox = document.getElementById('rx-info-box');
+const rxFileName = document.getElementById('rx-file-name');
+const rxFileSize = document.getElementById('rx-file-size');
+const rxTotalChunksLabel = document.getElementById('rx-total-chunks-label');
+const rxStateLabel = document.getElementById('rx-state-label');
+
+const rxStatusChip = document.getElementById('receiver-status-chip');
+const rxPct = document.getElementById('rx-pct');
 const rxChunksCount = document.getElementById('rx-chunks-count');
 const rxMissingCount = document.getElementById('rx-missing-count');
-const rxStreamStatus = document.getElementById('rx-stream-status');
-const rxProgressBar = document.getElementById('rx-progress-bar');
-const rxChunkGrid = document.getElementById('rx-chunk-grid');
+const rxSocketState = document.getElementById('rx-socket-state');
+const rxProgressFill = document.getElementById('rx-progress-fill');
+const rxChunkViewport = document.getElementById('rx-chunk-viewport');
 
-refreshTransfersBtn.addEventListener('click', fetchActiveTransfers);
+const btnRxDisconnect = document.getElementById('btn-rx-disconnect');
+const btnRxResume = document.getElementById('btn-rx-resume');
+const btnRxDownload = document.getElementById('btn-rx-download');
 
-async function fetchActiveTransfers() {
+btnRefreshSessions.addEventListener('click', fetchActiveSessions);
+
+async function fetchActiveSessions() {
   try {
     const res = await fetch('/api/transfers?limit=8');
     const list = await res.json();
-    activeTransfersList.innerHTML = '';
+    activeSessionsChips.innerHTML = '';
     if (list.length === 0) {
-      activeTransfersList.innerHTML = '<span class="empty-subtext">No active transfers on server</span>';
+      activeSessionsChips.innerHTML = '<span class="subtext">No active transfers on server</span>';
       return;
     }
     list.forEach(t => {
       const chip = document.createElement('button');
-      chip.className = 'transfer-chip';
-      chip.textContent = `${t.id} (${t.filename} - ${t.progress_percentage}%)`;
+      chip.className = 'session-chip';
+      chip.textContent = `${t.id} (${t.filename} • ${t.progress_percentage}%)`;
       chip.addEventListener('click', () => {
-        rxTransferIdInput.value = t.id;
+        rxCodeInput.value = t.id;
         connectReceiver();
       });
-      activeTransfersList.appendChild(chip);
+      activeSessionsChips.appendChild(chip);
     });
   } catch (err) {
-    console.error("Could not fetch active transfers:", err);
+    console.warn("Could not fetch active sessions:", err);
   }
 }
 
-rxConnectBtn.addEventListener('click', () => {
-  connectReceiver();
-});
+btnRxConnect.addEventListener('click', () => connectReceiver());
 
 async function connectReceiver() {
-  const code = rxTransferIdInput.value.trim().toUpperCase();
+  const code = rxCodeInput.value.trim().toUpperCase();
   if (!code) {
-    alert('Please enter a transfer code');
+    alert('Please enter or select a session code');
     return;
   }
   rxTransferId = code;
 
-  // Fetch transfer details from server
   try {
     const res = await fetch(`/api/transfers/${rxTransferId}`);
-    if (!res.ok) throw new Error(`Transfer ${rxTransferId} not found`);
+    if (!res.ok) throw new Error(`Transfer session ${rxTransferId} not found`);
     const data = await res.json();
 
-    rxMetadataCard.classList.remove('hidden');
-    rxMetaFilename.textContent = data.filename;
-    rxMetaFilesize.textContent = formatBytes(data.filesize);
-    rxMetaTotalChunks.textContent = data.total_chunks;
-    rxMetaStatus.textContent = data.status.toUpperCase();
+    rxInfoBox.classList.remove('hidden');
+    rxFileName.textContent = data.filename;
+    rxFileSize.textContent = formatBytes(data.filesize);
+    rxTotalChunksLabel.textContent = data.total_chunks;
+    rxStateLabel.textContent = data.status.toUpperCase();
 
     rxTotalChunks = data.total_chunks;
-    buildReceiverChunkGrid(data.total_chunks);
+    buildReceiverChunkMatrix(data.total_chunks);
 
-    // Populate already acknowledged chunks
     rxChunksReceived.clear();
     (data.acknowledged_chunks || []).forEach(idx => {
       rxChunksReceived.add(idx);
-      updateRxChunkBlock(idx, 'acked');
+      setRxChunkState(idx, 'acked');
     });
-    updateRxStats();
+    updateReceiverStats();
   } catch (e) {
     alert(`Could not connect: ${e.message}`);
     return;
@@ -495,13 +582,13 @@ async function connectReceiver() {
   receiverWs = new WebSocket(wsUrl);
 
   receiverWs.onopen = () => {
-    rxStatusBadge.textContent = 'CONNECTED';
-    rxStatusBadge.className = 'status-badge status-active';
-    rxDisconnectBtn.disabled = false;
-    rxResumeBtn.disabled = false;
-    rxStreamStatus.textContent = 'Listening';
+    rxStatusChip.textContent = 'CONNECTED';
+    rxStatusChip.className = 'status-chip status-active';
+    rxSocketState.textContent = 'Connected (Live)';
+    btnRxDisconnect.disabled = false;
+    btnRxResume.disabled = false;
 
-    // Send resume request to sync missing chunks
+    // Send resume request to sync state
     receiverWs.send(JSON.stringify({ type: 'resume_request' }));
   };
 
@@ -510,51 +597,51 @@ async function connectReceiver() {
       const msg = JSON.parse(event.data);
       handleReceiverMessage(msg);
     } catch (e) {
-      console.error("Receiver error:", e);
+      console.error("Receiver parse error:", e);
     }
   };
 
   receiverWs.onclose = () => {
-    rxStatusBadge.textContent = 'DISCONNECTED';
-    rxStatusBadge.className = 'status-badge status-idle';
-    rxDisconnectBtn.disabled = true;
-    rxStreamStatus.textContent = 'Offline';
+    rxStatusChip.textContent = 'OFFLINE';
+    rxStatusChip.className = 'status-chip status-idle';
+    rxSocketState.textContent = 'Disconnected';
+    btnRxDisconnect.disabled = true;
   };
 }
 
-function buildReceiverChunkGrid(count) {
-  rxChunkGrid.innerHTML = '';
+function buildReceiverChunkMatrix(count) {
+  rxChunkViewport.innerHTML = '';
   for (let i = 0; i < count; i++) {
     const block = document.createElement('div');
-    block.className = 'chunk-block';
+    block.className = 'chunk-unit';
     block.id = `rx-chunk-${i}`;
     block.title = `Chunk #${i}`;
-    rxChunkGrid.appendChild(block);
+    rxChunkViewport.appendChild(block);
   }
 }
 
-function updateRxChunkBlock(index, status) {
+function setRxChunkState(index, stateClass) {
   const el = document.getElementById(`rx-chunk-${index}`);
   if (!el) return;
-  el.className = `chunk-block status-${status}`;
+  el.className = `chunk-unit state-${stateClass}`;
 }
 
-function updateRxStats() {
+function updateReceiverStats() {
   const count = rxChunksReceived.size;
   const missing = rxTotalChunks - count;
   const pct = rxTotalChunks > 0 ? Math.round((count / rxTotalChunks) * 100) : 0;
 
   rxChunksCount.textContent = `${count} / ${rxTotalChunks}`;
   rxMissingCount.textContent = missing;
-  rxProgressPct.textContent = `${pct}%`;
-  rxProgressBar.style.width = `${pct}%`;
+  rxPct.textContent = `${pct}%`;
+  rxProgressFill.style.width = `${pct}%`;
 
   if (count === rxTotalChunks && rxTotalChunks > 0) {
-    rxStatusBadge.textContent = 'COMPLETED';
-    rxStatusBadge.className = 'status-badge status-success';
-    rxStreamStatus.textContent = 'All Chunks Stored';
-    rxDownloadBtn.classList.remove('hidden');
-    rxDownloadBtn.href = `/api/transfers/${rxTransferId}/download`;
+    rxStatusChip.textContent = 'COMPLETED';
+    rxStatusChip.className = 'status-chip status-success';
+    rxSocketState.textContent = 'Assembled (Complete)';
+    btnRxDownload.classList.remove('hidden');
+    btnRxDownload.href = `/api/transfers/${rxTransferId}/download`;
   }
 }
 
@@ -562,35 +649,34 @@ function handleReceiverMessage(msg) {
   if (msg.type === 'chunk_data') {
     const idx = msg.index;
     rxChunksReceived.add(idx);
-    updateRxChunkBlock(idx, 'acked');
-    updateRxStats();
+    setRxChunkState(idx, 'acked');
+    updateReceiverStats();
   } else if (msg.type === 'progress') {
-    rxMetaStatus.textContent = (msg.status || 'transferring').toUpperCase();
+    rxStateLabel.textContent = (msg.status || 'transferring').toUpperCase();
   } else if (msg.type === 'resume_state') {
     (msg.acknowledged_chunks || []).forEach(idx => {
       rxChunksReceived.add(idx);
-      updateRxChunkBlock(idx, 'acked');
+      setRxChunkState(idx, 'acked');
     });
-    updateRxStats();
+    updateReceiverStats();
   } else if (msg.type === 'completed') {
-    rxStatusBadge.textContent = 'COMPLETED';
-    rxStatusBadge.className = 'status-badge status-success';
-    rxDownloadBtn.classList.remove('hidden');
-    rxDownloadBtn.href = msg.download_url || `/api/transfers/${rxTransferId}/download`;
+    rxStatusChip.textContent = 'COMPLETED';
+    rxStatusChip.className = 'status-chip status-success';
+    btnRxDownload.classList.remove('hidden');
+    btnRxDownload.href = msg.download_url || `/api/transfers/${rxTransferId}/download`;
   } else if (msg.type === 'resume_error') {
     alert(`Resume Failure Alert: ${msg.message}`);
-    rxStreamStatus.textContent = 'Resume Error (F6)';
+    rxSocketState.textContent = 'Conflict Error (F6)';
   }
 }
 
-// Receiver Controls
-rxDisconnectBtn.addEventListener('click', () => {
+btnRxDisconnect.addEventListener('click', () => {
   if (receiverWs) {
-    receiverWs.close(1000, "User manual disconnect");
+    receiverWs.close(1000, "User manual disconnect simulation");
   }
 });
 
-rxResumeBtn.addEventListener('click', () => {
+btnRxResume.addEventListener('click', () => {
   if (receiverWs && receiverWs.readyState === WebSocket.OPEN) {
     receiverWs.send(JSON.stringify({ type: 'resume_request' }));
   } else {
@@ -598,23 +684,19 @@ rxResumeBtn.addEventListener('click', () => {
   }
 });
 
-// ----------------------------------------------------
-// FAILURE SIMULATOR & LOG CONSOLE (Phase 4, Phase 6)
-// ----------------------------------------------------
-const triggerF3Btn = document.getElementById('trigger-f3-btn');
-const triggerF4Btn = document.getElementById('trigger-f4-btn');
-const triggerF5Btn = document.getElementById('trigger-f5-btn');
-const triggerF6Btn = document.getElementById('trigger-f6-btn');
-const triggerF1Btn = document.getElementById('trigger-f1-btn');
-const triggerF2Btn = document.getElementById('trigger-f2-btn');
-const btnResetScenarios = document.getElementById('btn-reset-scenarios');
+// -------------------------------------------------------------------------
+// PRODPILOT CHAOS & FAULT INJECTION
+// -------------------------------------------------------------------------
+const chaosPill = document.getElementById('chaos-pill');
+const btnResetChaos = document.getElementById('btn-reset-chaos');
+const btnTriggerF3 = document.getElementById('btn-trigger-f3');
+const btnTriggerF4 = document.getElementById('btn-trigger-f4');
+const btnTriggerF5 = document.getElementById('btn-trigger-f5');
+const btnTriggerF6 = document.getElementById('btn-trigger-f6');
+const btnTriggerF1 = document.getElementById('btn-trigger-f1');
+const btnTriggerF2 = document.getElementById('btn-trigger-f2');
 
-const logStreamBox = document.getElementById('log-stream-box');
-const logFilterSelect = document.getElementById('log-filter-select');
-const btnCopyLogs = document.getElementById('btn-copy-logs');
-const btnClearConsole = document.getElementById('btn-clear-console');
-
-async function setScenario(scenarioKey) {
+async function triggerFaultScenario(scenarioKey) {
   try {
     const res = await fetch('/api/test/fail', {
       method: 'POST',
@@ -622,132 +704,166 @@ async function setScenario(scenarioKey) {
       body: JSON.stringify({ scenario: scenarioKey })
     });
     const data = await res.json();
-    incidentStatusIndicator.textContent = scenarioKey.toUpperCase();
-    incidentStatusIndicator.className = 'tab-badge badge-active-incident';
+    chaosPill.textContent = scenarioKey.toUpperCase();
+    chaosPill.className = 'badge-pill pill-active-fault';
     pollLogs();
   } catch (err) {
-    console.error("Error setting scenario:", err);
+    console.error("Fault scenario error:", err);
   }
 }
 
-triggerF3Btn.addEventListener('click', () => setScenario('low_error'));
-triggerF4Btn.addEventListener('click', () => setScenario('high_error'));
-triggerF6Btn.addEventListener('click', () => setScenario('resume_failure'));
-triggerF1Btn.addEventListener('click', () => setScenario('unhealthy'));
+btnTriggerF3.addEventListener('click', () => triggerFaultScenario('low_error'));
+btnTriggerF4.addEventListener('click', () => triggerFaultScenario('high_error'));
+btnTriggerF6.addEventListener('click', () => triggerFaultScenario('resume_failure'));
+btnTriggerF1.addEventListener('click', () => triggerFaultScenario('unhealthy'));
 
-triggerF5Btn.addEventListener('click', async () => {
-  if (!rxTransferId && !currentTransferId) {
-    alert('Please enter or select an active transfer session first');
+btnTriggerF5.addEventListener('click', async () => {
+  const id = rxTransferId || currentTransferId;
+  if (!id) {
+    alert('Please enter or select a session code first');
     return;
   }
-  const id = rxTransferId || currentTransferId;
   await fetch(`/api/test/disconnect-receiver?transfer_id=${id}`, { method: 'POST' });
   pollLogs();
 });
 
-triggerF2Btn.addEventListener('click', async () => {
-  if (confirm('F2 Crash Simulation: This will fatally crash the backend process. Are you sure?')) {
+btnTriggerF2.addEventListener('click', async () => {
+  if (confirm('F2 Crash Simulation: This will terminate the backend process with code 1. Are you sure?')) {
     try {
       await fetch('/api/test/crash', { method: 'POST' });
     } catch (e) {
       console.warn("Backend crash initiated");
     }
-    alert('Crash signal dispatched. Backend process terminated with exit code 1.');
+    alert('Fatal crash signal emitted (exit code 1). Process terminated.');
     checkHealth();
   }
 });
 
-btnResetScenarios.addEventListener('click', async () => {
+btnResetChaos.addEventListener('click', async () => {
   await fetch('/api/test/reset', { method: 'POST' });
-  incidentStatusIndicator.textContent = 'NORMAL';
-  incidentStatusIndicator.className = 'tab-badge';
+  chaosPill.textContent = 'NORMAL';
+  chaosPill.className = 'badge-pill';
   checkHealth();
   pollLogs();
 });
 
-// Logs Polling & Rendering
-let lastSeenLogCount = 0;
+// -------------------------------------------------------------------------
+// OBSERVABILITY LOG STREAMER
+// -------------------------------------------------------------------------
+const logTerminalBody = document.getElementById('log-terminal-body');
+const logLevelFilter = document.getElementById('log-level-filter');
+const logSearchInput = document.getElementById('log-search-input');
+const btnCopyLogStream = document.getElementById('btn-copy-log-stream');
+const btnClearLogStream = document.getElementById('btn-clear-log-stream');
 
 async function pollLogs() {
-  const minLevel = logFilterSelect.value;
-  const url = minLevel ? `/api/logs?limit=80&min_level=${minLevel}` : '/api/logs?limit=80';
+  const minLevel = logLevelFilter.value;
+  const url = minLevel ? `/api/logs?limit=100&min_level=${minLevel}` : '/api/logs?limit=100';
   try {
     const res = await fetch(url);
     if (!res.ok) return;
     const data = await res.json();
     renderLogs(data.logs || []);
   } catch (err) {
-    // Backend might be crashed or unreachable
+    // Backend may be temporarily down during crash simulation
   }
 }
 
 function renderLogs(logs) {
-  logStreamBox.innerHTML = '';
-  if (logs.length === 0) {
-    logStreamBox.innerHTML = '<div class="empty-subtext">No logs found matching filter</div>';
+  const searchTerm = logSearchInput.value.toLowerCase().trim();
+  logTerminalBody.innerHTML = '';
+
+  const filtered = searchTerm
+    ? logs.filter(l => (l.message || '').toLowerCase().includes(searchTerm))
+    : logs;
+
+  if (filtered.length === 0) {
+    logTerminalBody.innerHTML = '<div class="log-line"><span class="log-content" style="color: #64748b;">No log entries match criteria</span></div>';
     return;
   }
-  logs.forEach(log => {
-    const row = document.createElement('div');
+
+  filtered.forEach(log => {
+    const line = document.createElement('div');
     const levelLower = (log.level || 'info').toLowerCase();
-    row.className = `log-entry log-entry-${levelLower}`;
+    line.className = `log-line log-${levelLower}`;
 
     const timeSpan = document.createElement('span');
-    timeSpan.className = 'log-time';
+    timeSpan.className = 'log-timestamp';
     timeSpan.textContent = `[${log.timestamp.slice(11, 19)}]`;
 
-    const levelSpan = document.createElement('span');
-    levelSpan.className = 'log-level';
-    levelSpan.textContent = `[${log.level}]`;
+    const tagSpan = document.createElement('span');
+    tagSpan.className = 'log-tag';
+    tagSpan.textContent = `[${log.level}]`;
 
     const msgSpan = document.createElement('span');
-    msgSpan.className = 'log-msg';
+    msgSpan.className = 'log-content';
     msgSpan.textContent = log.raw_message || log.message;
 
-    row.appendChild(timeSpan);
-    row.appendChild(levelSpan);
-    row.appendChild(msgSpan);
-    logStreamBox.appendChild(row);
+    line.appendChild(timeSpan);
+    line.appendChild(tagSpan);
+    line.appendChild(msgSpan);
+    logTerminalBody.appendChild(line);
   });
-  logStreamBox.scrollTop = logStreamBox.scrollHeight;
+  logTerminalBody.scrollTop = logTerminalBody.scrollHeight;
 }
 
-logFilterSelect.addEventListener('change', pollLogs);
-btnClearConsole.addEventListener('click', () => logStreamBox.innerHTML = '');
-btnCopyLogs.addEventListener('click', () => {
-  const text = Array.from(logStreamBox.querySelectorAll('.log-entry'))
+logLevelFilter.addEventListener('change', pollLogs);
+logSearchInput.addEventListener('input', pollLogs);
+btnClearLogStream.addEventListener('click', () => logTerminalBody.innerHTML = '');
+
+btnCopyLogStream.addEventListener('click', () => {
+  const text = Array.from(logTerminalBody.querySelectorAll('.log-line'))
     .map(el => el.textContent)
     .join('\n');
   navigator.clipboard.writeText(text).then(() => {
-    btnCopyLogs.textContent = 'Copied!';
-    setTimeout(() => btnCopyLogs.textContent = 'Copy Logs', 1500);
+    btnCopyLogStream.textContent = 'Copied!';
+    setTimeout(() => btnCopyLogStream.textContent = 'Copy for ProdPilot', 1500);
   });
 });
 
-// Health Check Loop
+// -------------------------------------------------------------------------
+// HEALTH PROBE & URL AUTO-CONNECT
+// -------------------------------------------------------------------------
+const healthDot = document.getElementById('health-dot');
+const healthLabel = document.getElementById('health-label');
+
 async function checkHealth() {
   try {
     const res = await fetch('/api/health');
     if (res.ok) {
       const data = await res.json();
-      healthIndicator.className = 'status-indicator status-green';
-      healthText.textContent = 'Service Healthy';
+      healthDot.className = 'pulse-dot green';
+      healthLabel.textContent = 'System Healthy';
       if (data.simulation_state && data.simulation_state.error_mode !== 'none') {
-        incidentStatusIndicator.textContent = data.simulation_state.error_mode.toUpperCase();
-        incidentStatusIndicator.className = 'tab-badge badge-active-incident';
+        chaosPill.textContent = data.simulation_state.error_mode.toUpperCase();
+        chaosPill.className = 'badge-pill pill-active-fault';
       }
     } else {
-      healthIndicator.className = 'status-indicator status-red';
-      healthText.textContent = `Degraded (${res.status})`;
+      healthDot.className = 'pulse-dot red';
+      healthLabel.textContent = `Degraded (${res.status})`;
     }
   } catch (err) {
-    healthIndicator.className = 'status-indicator status-red';
-    healthText.textContent = 'Offline / Unreachable';
+    healthDot.className = 'pulse-dot red';
+    healthLabel.textContent = 'Offline / Unreachable';
   }
 }
 
-// Polling intervals
+// Auto-join from URL parameter (e.g. ?rx=CS-XXXX or ?transfer=CS-XXXX)
+function checkUrlAutoConnect() {
+  const params = new URLSearchParams(window.location.search);
+  const rxCode = params.get('rx') || params.get('transfer');
+  if (rxCode) {
+    rxCodeInput.value = rxCode.toUpperCase();
+    document.getElementById('studio-section').scrollIntoView({ behavior: 'smooth' });
+    connectReceiver();
+  }
+}
+
+// Polling loops
 setInterval(checkHealth, 4000);
-setInterval(pollLogs, 2000);
+setInterval(pollLogs, 2500);
+
 checkHealth();
 pollLogs();
+checkUrlAutoConnect();
+fetchActiveSessions();

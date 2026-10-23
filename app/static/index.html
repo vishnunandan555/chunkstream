@@ -3,379 +3,530 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>ChunkStream — Resumable Chunked Transfer</title>
-  <meta name="description" content="A resumable chunked file-transfer testbed application for ProdPilot incident detection and recovery.">
+  <title>ChunkStream — Resumable Chunk Relay & Chaos Testing Bed</title>
+  <meta name="description" content="A live resumable chunked file-transfer application and fault-injection testbed for testing the ProdPilot autonomous incident lifecycle. No login required.">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
-  <div class="app-container">
-    <!-- Header -->
-    <header class="app-header">
-      <div class="header-brand">
-        <div class="brand-logo">
-          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-            <polyline points="16 16 12 12 8 16"></polyline>
-            <polyline points="12 12 12 21"></polyline>
-            <path d="M20.39 18.39A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.3"></path>
-          </svg>
-        </div>
-        <div>
-          <h1 class="brand-title">ChunkStream</h1>
-          <p class="brand-subtitle">Resumable Chunked Transfer & Incident Testbed for ProdPilot</p>
-        </div>
+  <!-- Ambient background glow elements -->
+  <div class="glow-orb orb-1"></div>
+  <div class="glow-orb orb-2"></div>
+  <div class="glow-orb orb-3"></div>
+
+  <div class="app-layout">
+    <!-- Top Navigation Bar -->
+    <header class="top-nav">
+      <div class="nav-left">
+        <a href="#hero" class="brand-container">
+          <div class="brand-icon-box">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="16 16 12 12 8 16"></polyline>
+              <polyline points="12 12 12 21"></polyline>
+              <path d="M20.39 18.39A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.3"></path>
+            </svg>
+          </div>
+          <div class="brand-text">
+            <span class="brand-name">ChunkStream</span>
+            <span class="brand-version">v1.0.0</span>
+          </div>
+        </a>
       </div>
-      
-      <div class="header-meta">
-        <div class="meta-badge" id="system-health-badge">
-          <span class="status-indicator status-green" id="health-indicator"></span>
-          <span id="health-text">Service Healthy</span>
+
+      <nav class="nav-links">
+        <button class="nav-item active" data-target="studio-section">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect><line x1="8" y1="21" x2="16" y2="21"></line><line x1="12" y1="17" x2="12" y2="21"></line></svg>
+          <span>Transfer Studio</span>
+        </button>
+        <button class="nav-item" data-target="chaos-section">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"></path></svg>
+          <span>Incident Sandbox</span>
+          <span class="badge-pill" id="chaos-pill">NORMAL</span>
+        </button>
+        <button class="nav-item" data-target="logs-section">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 17 10 11 4 5"></polyline><line x1="12" y1="19" x2="20" y2="19"></line></svg>
+          <span>Live Logs</span>
+        </button>
+        <button class="nav-item" data-target="architecture-section">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 2 7 12 12 22 7 12 2"></polygon><polyline points="2 17 12 22 22 17"></polyline><polyline points="2 12 12 17 22 12"></polyline></svg>
+          <span>Architecture & API</span>
+        </button>
+      </nav>
+
+      <div class="nav-right">
+        <div class="system-health-pill" id="system-health-pill">
+          <span class="pulse-dot green" id="health-dot"></span>
+          <span class="health-label" id="health-label">System Healthy</span>
         </div>
-        <div class="meta-badge" id="env-badge">
-          <span class="env-tag">PROD-SIM</span>
-          <span class="version-tag" id="app-version">v1.0.0</span>
-        </div>
+        <div class="deploy-tag">Render Ready</div>
       </div>
     </header>
 
-    <!-- Navigation Tabs -->
-    <nav class="nav-tabs" role="tablist">
-      <button class="nav-tab active" id="tab-sender-btn" data-tab="sender">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
-          <polyline points="17 8 12 3 7 8"></polyline>
-          <line x1="12" y1="3" x2="12" y2="15"></line>
-        </svg>
-        <span>Sender</span>
-      </button>
-      <button class="nav-tab" id="tab-receiver-btn" data-tab="receiver">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
-          <polyline points="7 10 12 15 17 10"></polyline>
-          <line x1="12" y1="15" x2="12" y2="3"></line>
-        </svg>
-        <span>Receiver</span>
-      </button>
-      <button class="nav-tab" id="tab-control-btn" data-tab="control">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"></path>
-        </svg>
-        <span>Failure Lab & Logs</span>
-        <span class="tab-badge" id="incident-status-indicator">NORMAL</span>
-      </button>
-    </nav>
+    <!-- Main Content Flow -->
+    <main class="page-content">
+      <!-- Hero Banner -->
+      <section class="hero-section" id="hero">
+        <div class="hero-badge">
+          <span class="badge-icon">⚡</span>
+          <span>ProdPilot Incident Testbed & File Streamer • No Sign-in Required</span>
+        </div>
+        <h1 class="hero-title">
+          High-Speed Resumable Transfers <br/>
+          <span class="gradient-text">Engineered for Chaos & Observability</span>
+        </h1>
+        <p class="hero-subtitle">
+          Stream files in verifiable chunks through a live WebSocket relay. Simulate network dropouts, chunk corruption storms, server crashes, and verify autonomous incident recovery in real time.
+        </p>
 
-    <!-- Main Content Area -->
-    <main class="main-content">
-      <!-- 1. SENDER TAB -->
-      <section class="tab-panel active" id="panel-sender">
-        <div class="grid-layout">
-          <!-- File Config Card -->
-          <div class="card glass-card">
-            <h2 class="card-title">1. File Selection & Chunking</h2>
-            
-            <div class="drop-zone" id="sender-drop-zone">
-              <input type="file" id="sender-file-input" class="file-input-hidden">
-              <div class="drop-zone-icon">
-                <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75">
-                  <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
-                  <polyline points="14 2 14 8 20 8"></polyline>
-                  <line x1="12" y1="18" x2="12" y2="12"></line>
-                  <line x1="9" y1="15" x2="15" y2="15"></line>
-                </svg>
-              </div>
-              <p class="drop-title">Drag & drop any file here, or <span class="highlight-link">browse</span></p>
-              <p class="drop-hint">Images, videos, zip archives, or test binaries</p>
-            </div>
+        <div class="hero-actions">
+          <button class="btn btn-hero-primary" id="btn-hero-sample">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
+            <span>Generate 2 MB Test Stream</span>
+          </button>
+          <button class="btn btn-hero-secondary" id="btn-hero-chaos">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4"></path></svg>
+            <span>Trigger Failure Scenarios</span>
+          </button>
+        </div>
 
-            <div class="file-summary hidden" id="file-summary-box">
-              <div class="file-info-row">
-                <span class="file-name" id="selected-file-name">filename.ext</span>
-                <span class="file-size" id="selected-file-size">0 KB</span>
-              </div>
-            </div>
-
-            <div class="form-group">
-              <div class="label-row">
-                <label for="chunk-size-select">Chunk Size</label>
-                <span class="chunk-calc-text" id="chunk-calc-text">0 chunks planned</span>
-              </div>
-              <select id="chunk-size-select" class="custom-select">
-                <option value="65536">64 KB (fine chunks, ideal for testing)</option>
-                <option value="131072">128 KB</option>
-                <option value="262144" selected>256 KB (standard)</option>
-                <option value="524288">512 KB</option>
-                <option value="1048576">1 MB</option>
-              </select>
-            </div>
-
-            <div class="form-group">
-              <label for="transfer-id-input">Transfer Session Code</label>
-              <div class="input-action-group">
-                <input type="text" id="transfer-id-input" class="custom-input monospace-input" placeholder="e.g. CS-98FA" readonly>
-                <button type="button" class="btn btn-secondary" id="copy-transfer-id-btn" title="Copy transfer code">Copy</button>
-                <button type="button" class="btn btn-secondary" id="regen-transfer-id-btn" title="Generate new ID">New</button>
-              </div>
-            </div>
-
-            <div class="action-buttons-row">
-              <button class="btn btn-primary" id="btn-start-transfer" disabled>
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <polygon points="5 3 19 12 5 21 5 3"></polygon>
-                </svg>
-                <span>Start Transfer</span>
-              </button>
-              <button class="btn btn-outline" id="btn-pause-transfer" disabled>Pause</button>
-              <button class="btn btn-outline" id="btn-resume-transfer" disabled>Resume</button>
-            </div>
+        <div class="hero-stats-strip">
+          <div class="hero-stat">
+            <span class="stat-num">0%</span>
+            <span class="stat-name">Data Loss on Disconnect</span>
           </div>
+          <div class="hero-divider"></div>
+          <div class="hero-stat">
+            <span class="stat-num">64 KB - 1 MB</span>
+            <span class="stat-name">Dynamic Chunk Slicing</span>
+          </div>
+          <div class="hero-divider"></div>
+          <div class="hero-stat">
+            <span class="stat-num">SHA-256</span>
+            <span class="stat-name">Per-Chunk Integrity</span>
+          </div>
+          <div class="hero-divider"></div>
+          <div class="hero-stat">
+            <span class="stat-num">Render + SQLite</span>
+            <span class="stat-name">Zero-Config Deployment</span>
+          </div>
+        </div>
+      </section>
 
-          <!-- Live Sender Progress & Visual Grid -->
-          <div class="card glass-card">
-            <div class="card-header-split">
-              <h2 class="card-title">2. Live Sender Stream</h2>
-              <span class="status-badge status-idle" id="sender-status-badge">IDLE</span>
+      <!-- SECTION 1: TRANSFER STUDIO -->
+      <section class="section-container" id="studio-section">
+        <div class="section-header">
+          <div>
+            <h2 class="section-title">Transfer Studio</h2>
+            <p class="section-desc">Select or generate a file on the Sender node, share the session code, and stream to any device.</p>
+          </div>
+          <div class="view-switchers">
+            <button class="switch-btn active" id="view-split-btn">Split View</button>
+            <button class="switch-btn" id="view-sender-btn">Sender Only</button>
+            <button class="switch-btn" id="view-receiver-btn">Receiver Only</button>
+          </div>
+        </div>
+
+        <div class="studio-grid" id="studio-grid">
+          <!-- SENDER NODE -->
+          <div class="studio-card glass-panel" id="sender-card">
+            <div class="card-top-bar">
+              <div class="card-identity">
+                <span class="node-icon sender-icon">↑</span>
+                <div>
+                  <h3 class="node-title">Sender Node</h3>
+                  <p class="node-sub">Source File Slicer & Transmitter</p>
+                </div>
+              </div>
+              <span class="status-chip status-idle" id="sender-status-chip">IDLE</span>
             </div>
 
-            <!-- Stats Bar -->
-            <div class="stats-grid">
-              <div class="stat-item">
-                <span class="stat-label">Progress</span>
-                <span class="stat-value" id="sender-progress-pct">0%</span>
+            <!-- Drag & Drop Zone -->
+            <div class="drop-zone" id="sender-drop-zone">
+              <input type="file" id="sender-file-input" class="hidden-file-input">
+              <div class="drop-icon-circle">
+                <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                  <polyline points="17 8 12 3 7 8"></polyline>
+                  <line x1="12" y1="3" x2="12" y2="15"></line>
+                </svg>
               </div>
-              <div class="stat-item">
-                <span class="stat-label">Acknowledged</span>
-                <span class="stat-value" id="sender-chunks-acked">0 / 0</span>
+              <div class="drop-texts">
+                <p class="drop-main">Drop any file here, or <span class="highlight">browse</span></p>
+                <p class="drop-sub">PDFs, images, archives, videos, or raw binaries</p>
               </div>
-              <div class="stat-item">
-                <span class="stat-label">Speed</span>
-                <span class="stat-value" id="sender-speed">0.0 MB/s</span>
+              <div class="drop-actions">
+                <button type="button" class="btn btn-sm btn-ghost" id="btn-quick-sample-file">
+                  ⚡ Generate 2 MB Sample File
+                </button>
               </div>
-              <div class="stat-item">
-                <span class="stat-label">Retries</span>
-                <span class="stat-value text-warning" id="sender-retries">0</span>
+            </div>
+
+            <!-- Selected File Metadata Bar -->
+            <div class="file-meta-bar hidden" id="file-meta-bar">
+              <div class="file-icon-badge">📄</div>
+              <div class="file-names-group">
+                <div class="file-primary-name" id="selected-file-name">-</div>
+                <div class="file-secondary-details">
+                  <span id="selected-file-size">0 KB</span> • 
+                  <span id="selected-file-hash">SHA-256 computing...</span>
+                </div>
+              </div>
+              <button type="button" class="btn-icon" id="btn-clear-file" title="Clear selection">✕</button>
+            </div>
+
+            <!-- Parameters Grid -->
+            <div class="form-row-grid">
+              <div class="form-control">
+                <label for="chunk-size-select">
+                  <span>Chunk Size</span>
+                  <span class="chunk-count-preview" id="chunk-count-preview">0 chunks</span>
+                </label>
+                <select id="chunk-size-select" class="input-element select-element">
+                  <option value="65536">64 KB (Fine-grained • Best for visual test)</option>
+                  <option value="131072">128 KB</option>
+                  <option value="262144" selected>256 KB (Recommended)</option>
+                  <option value="524288">512 KB</option>
+                  <option value="1048576">1 MB (High throughput)</option>
+                </select>
+              </div>
+
+              <div class="form-control">
+                <label for="transfer-code-input">
+                  <span>Session Code</span>
+                  <span class="label-link" id="btn-new-code">Generate New</span>
+                </label>
+                <div class="code-action-group">
+                  <input type="text" id="transfer-code-input" class="input-element code-input" readonly>
+                  <button type="button" class="btn btn-secondary btn-copy" id="btn-copy-code" title="Copy code">Copy</button>
+                  <button type="button" class="btn btn-secondary btn-copy" id="btn-share-link" title="Copy shareable link">Share Link</button>
+                </div>
+              </div>
+            </div>
+
+            <!-- Sender Metrics Bar -->
+            <div class="metrics-grid">
+              <div class="metric-cell">
+                <span class="metric-title">Progress</span>
+                <span class="metric-data" id="sender-pct">0%</span>
+              </div>
+              <div class="metric-cell">
+                <span class="metric-title">Chunks Acked</span>
+                <span class="metric-data" id="sender-chunks-count">0 / 0</span>
+              </div>
+              <div class="metric-cell">
+                <span class="metric-title">Speed</span>
+                <span class="metric-data" id="sender-speed-val">0.0 MB/s</span>
+              </div>
+              <div class="metric-cell">
+                <span class="metric-title">Retries</span>
+                <span class="metric-data warning-color" id="sender-retries-count">0</span>
               </div>
             </div>
 
             <!-- Progress Bar -->
-            <div class="progress-bar-container">
-              <div class="progress-bar-fill" id="sender-progress-bar" style="width: 0%"></div>
+            <div class="progress-track">
+              <div class="progress-fill fill-cyan" id="sender-progress-fill" style="width: 0%"></div>
             </div>
 
-            <!-- Chunk Matrix Visualizer -->
-            <div class="chunk-matrix-section">
-              <div class="matrix-header">
-                <span class="matrix-title">Chunk Grid Matrix</span>
+            <!-- Interactive Chunk Visualizer -->
+            <div class="matrix-card">
+              <div class="matrix-top">
+                <span class="matrix-title">Sender Chunk Grid</span>
                 <div class="matrix-legend">
-                  <span class="legend-item"><span class="legend-dot dot-pending"></span> Pending</span>
-                  <span class="legend-item"><span class="legend-dot dot-sending"></span> In-Flight</span>
-                  <span class="legend-item"><span class="legend-dot dot-acked"></span> Acknowledged</span>
-                  <span class="legend-item"><span class="legend-dot dot-failed"></span> Retried</span>
+                  <span class="legend-unit"><span class="box-dot bg-pending"></span> Idle</span>
+                  <span class="legend-unit"><span class="box-dot bg-sending"></span> In-Flight</span>
+                  <span class="legend-unit"><span class="box-dot bg-acked"></span> Acked</span>
+                  <span class="legend-unit"><span class="box-dot bg-failed"></span> Retried</span>
                 </div>
               </div>
-              <div class="chunk-grid" id="sender-chunk-grid">
-                <div class="grid-empty-state">Select a file to generate the chunk grid</div>
+              <div class="chunk-viewport" id="sender-chunk-viewport">
+                <div class="viewport-placeholder">Select or generate a file to initialize chunk blocks</div>
               </div>
+            </div>
+
+            <!-- Controls Row -->
+            <div class="controls-row">
+              <button class="btn btn-primary" id="btn-start-stream" disabled>
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
+                <span>Start Stream</span>
+              </button>
+              <button class="btn btn-outline" id="btn-pause-stream" disabled>Pause</button>
+              <button class="btn btn-outline" id="btn-resume-stream" disabled>Resume Stream</button>
             </div>
           </div>
-        </div>
-      </section>
 
-      <!-- 2. RECEIVER TAB -->
-      <section class="tab-panel" id="panel-receiver">
-        <div class="grid-layout">
-          <!-- Receiver Connection Card -->
-          <div class="card glass-card">
-            <h2 class="card-title">1. Connect to Transfer</h2>
-            
-            <div class="form-group">
-              <label for="rx-transfer-id-input">Enter Transfer Code</label>
-              <div class="input-action-group">
-                <input type="text" id="rx-transfer-id-input" class="custom-input monospace-input" placeholder="e.g. CS-98FA">
-                <button type="button" class="btn btn-primary" id="rx-connect-btn">Connect</button>
+          <!-- RECEIVER NODE -->
+          <div class="studio-card glass-panel" id="receiver-card">
+            <div class="card-top-bar">
+              <div class="card-identity">
+                <span class="node-icon receiver-icon">↓</span>
+                <div>
+                  <h3 class="node-title">Receiver Node</h3>
+                  <p class="node-sub">Real-Time Assembly & Downloader</p>
+                </div>
+              </div>
+              <span class="status-chip status-idle" id="receiver-status-chip">OFFLINE</span>
+            </div>
+
+            <!-- Receiver Connection Input -->
+            <div class="form-control">
+              <label for="rx-code-input">Enter Session Code to Join</label>
+              <div class="code-action-group">
+                <input type="text" id="rx-code-input" class="input-element code-input" placeholder="e.g. CS-98FA">
+                <button type="button" class="btn btn-primary" id="btn-rx-connect">Connect & Listen</button>
               </div>
             </div>
 
-            <div class="recent-transfers-box">
-              <div class="recent-transfers-header">
+            <!-- Active Server Sessions List -->
+            <div class="active-sessions-box">
+              <div class="sessions-header">
                 <span>Active Server Transfers</span>
-                <button type="button" class="btn-text-link" id="refresh-transfers-btn">Refresh</button>
+                <button type="button" class="link-action" id="btn-refresh-sessions">Refresh</button>
               </div>
-              <div class="transfer-chips-list" id="active-transfers-list">
-                <span class="empty-subtext">Click refresh or start a transfer</span>
-              </div>
-            </div>
-
-            <div class="rx-metadata-card hidden" id="rx-metadata-card">
-              <div class="file-detail-row">
-                <span class="detail-label">Filename:</span>
-                <span class="detail-value" id="rx-meta-filename">-</span>
-              </div>
-              <div class="file-detail-row">
-                <span class="detail-label">Total Size:</span>
-                <span class="detail-value" id="rx-meta-filesize">-</span>
-              </div>
-              <div class="file-detail-row">
-                <span class="detail-label">Total Chunks:</span>
-                <span class="detail-value" id="rx-meta-total-chunks">-</span>
-              </div>
-              <div class="file-detail-row">
-                <span class="detail-label">Status:</span>
-                <span class="detail-value status-highlight" id="rx-meta-status">-</span>
+              <div class="sessions-chips" id="active-sessions-chips">
+                <span class="subtext">Click refresh or start a sender session</span>
               </div>
             </div>
 
-            <div class="action-buttons-row">
-              <button class="btn btn-outline" id="rx-disconnect-btn" disabled>Disconnect (F5 Sim)</button>
-              <button class="btn btn-outline" id="rx-resume-btn" disabled>Request Missing / Resume</button>
-              <a id="rx-download-btn" class="btn btn-success hidden" download>
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
-                  <polyline points="7 10 12 15 17 10"></polyline>
-                  <line x1="12" y1="15" x2="12" y2="3"></line>
-                </svg>
+            <!-- Receiver Session Details -->
+            <div class="rx-info-box hidden" id="rx-info-box">
+              <div class="info-row">
+                <span class="info-k">Target File:</span>
+                <span class="info-v" id="rx-file-name">-</span>
+              </div>
+              <div class="info-row">
+                <span class="info-k">Total Size:</span>
+                <span class="info-v" id="rx-file-size">-</span>
+              </div>
+              <div class="info-row">
+                <span class="info-k">Total Chunks:</span>
+                <span class="info-v" id="rx-total-chunks-label">-</span>
+              </div>
+              <div class="info-row">
+                <span class="info-k">Transfer State:</span>
+                <span class="info-v highlight-status" id="rx-state-label">PENDING</span>
+              </div>
+            </div>
+
+            <!-- Receiver Metrics Bar -->
+            <div class="metrics-grid">
+              <div class="metric-cell">
+                <span class="metric-title">Assembled</span>
+                <span class="metric-data" id="rx-pct">0%</span>
+              </div>
+              <div class="metric-cell">
+                <span class="metric-title">Chunks Received</span>
+                <span class="metric-data" id="rx-chunks-count">0 / 0</span>
+              </div>
+              <div class="metric-cell">
+                <span class="metric-title">Missing Chunks</span>
+                <span class="metric-data warning-color" id="rx-missing-count">0</span>
+              </div>
+              <div class="metric-cell">
+                <span class="metric-title">Socket State</span>
+                <span class="metric-data" id="rx-socket-state">Disconnected</span>
+              </div>
+            </div>
+
+            <!-- Progress Bar -->
+            <div class="progress-track">
+              <div class="progress-fill fill-emerald" id="rx-progress-fill" style="width: 0%"></div>
+            </div>
+
+            <!-- Receiver Matrix Viewport -->
+            <div class="matrix-card">
+              <div class="matrix-top">
+                <span class="matrix-title">Incoming Chunk Assembly Matrix</span>
+                <div class="matrix-legend">
+                  <span class="legend-unit"><span class="box-dot bg-pending"></span> Missing</span>
+                  <span class="legend-unit"><span class="box-dot bg-acked"></span> Received on Disk</span>
+                </div>
+              </div>
+              <div class="chunk-viewport" id="rx-chunk-viewport">
+                <div class="viewport-placeholder">Connect to a transfer session to visualize incoming chunks</div>
+              </div>
+            </div>
+
+            <!-- Receiver Controls & Download Action -->
+            <div class="controls-row">
+              <button class="btn btn-outline" id="btn-rx-disconnect" disabled>Disconnect (Simulate F5)</button>
+              <button class="btn btn-outline" id="btn-rx-resume" disabled>Request Missing (Resume)</button>
+              <a id="btn-rx-download" class="btn btn-success hidden" download>
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
                 <span>Download Assembled File</span>
               </a>
             </div>
           </div>
+        </div>
+      </section>
 
-          <!-- Receiver Stream & Grid -->
-          <div class="card glass-card">
-            <div class="card-header-split">
-              <h2 class="card-title">2. Incoming Assembly Stream</h2>
-              <span class="status-badge status-idle" id="rx-status-badge">DISCONNECTED</span>
+      <!-- SECTION 2: PRODPILOT INCIDENT SANDBOX -->
+      <section class="section-container" id="chaos-section">
+        <div class="section-header">
+          <div>
+            <h2 class="section-title">ProdPilot Incident & Chaos Sandbox</h2>
+            <p class="section-desc">Trigger controlled production faults to validate ProdPilot log ingestion, fingerprinting, SEV triage, and automated recovery.</p>
+          </div>
+          <button class="btn btn-secondary btn-sm" id="btn-reset-chaos">Reset All Scenarios (Return to Green)</button>
+        </div>
+
+        <div class="scenarios-grid">
+          <!-- F3 Low Error -->
+          <div class="chaos-card" id="card-f3">
+            <div class="chaos-tag tag-warning">F3 • Low Error Rate</div>
+            <h3 class="chaos-title">Transient Packet Drop</h3>
+            <p class="chaos-desc">Injects intermittent 20% chunk transmission drops. Client auto-retries with backoff; transfer completes without failure.</p>
+            <button class="btn btn-outline-warning btn-sm" id="btn-trigger-f3">Inject Low Errors (20%)</button>
+          </div>
+
+          <!-- F4 High Error -->
+          <div class="chaos-card" id="card-f4">
+            <div class="chaos-tag tag-danger">F4 • High Error Rate</div>
+            <h3 class="chaos-title">Repeated Failure Storm</h3>
+            <p class="chaos-desc">Simulates severe 75% chunk corruption. Generates high-frequency error traces for ProdPilot incident clustering and alert generation.</p>
+            <button class="btn btn-outline-danger btn-sm" id="btn-trigger-f4">Trigger Error Storm (75%)</button>
+          </div>
+
+          <!-- F5 Disconnect -->
+          <div class="chaos-card" id="card-f5">
+            <div class="chaos-tag tag-info">F5 • Network Cut</div>
+            <h3 class="chaos-title">Abrupt Receiver Dropout</h3>
+            <p class="chaos-desc">Force closes the active receiver WebSocket mid-transfer to test state preservation and automatic resumability.</p>
+            <button class="btn btn-outline-info btn-sm" id="btn-trigger-f5">Drop Receiver Socket</button>
+          </div>
+
+          <!-- F6 Resume Conflict -->
+          <div class="chaos-card" id="card-f6">
+            <div class="chaos-tag tag-danger">F6 • Resume Conflict</div>
+            <h3 class="chaos-title">State Corruption on Resume</h3>
+            <p class="chaos-desc">Simulates checksum mismatch or invalid metadata state when resuming, testing error trapping and rollback paths.</p>
+            <button class="btn btn-outline-danger btn-sm" id="btn-trigger-f6">Simulate Resume Failure</button>
+          </div>
+
+          <!-- F1 Health Outage -->
+          <div class="chaos-card" id="card-f1">
+            <div class="chaos-tag tag-critical">F1 • Health Degradation</div>
+            <h3 class="chaos-title">Degrade /health Probe (503)</h3>
+            <p class="chaos-desc">Causes the /api/health endpoint to return 503 Service Unavailable, alerting external uptime watchdogs and Render monitoring.</p>
+            <button class="btn btn-outline-danger btn-sm" id="btn-trigger-f1">Force Health 503</button>
+          </div>
+
+          <!-- F2 Fatal Crash -->
+          <div class="chaos-card" id="card-f2">
+            <div class="chaos-tag tag-critical">F2 • Fatal Crash</div>
+            <h3 class="chaos-title">Kill Server Process (SIGSEGV)</h3>
+            <p class="chaos-desc">Emits a critical crash trace and executes os._exit(1) to test supervisor process recovery and cold-restart survivability.</p>
+            <button class="btn btn-danger btn-sm" id="btn-trigger-f2">Crash Server (F2)</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- SECTION 3: LIVE OBSERVABILITY LOGS -->
+      <section class="section-container" id="logs-section">
+        <div class="section-header">
+          <div>
+            <h2 class="section-title">Live Observability & Log Stream</h2>
+            <p class="section-desc">Real-time structured logs buffered in memory and accessible via <code>GET /api/logs</code> for ProdPilot ingestion.</p>
+          </div>
+          <div class="log-controls">
+            <select id="log-level-filter" class="input-element select-element select-compact">
+              <option value="">All Log Levels</option>
+              <option value="INFO">INFO & Higher</option>
+              <option value="WARNING">WARNING & Higher</option>
+              <option value="ERROR">ERROR & Higher</option>
+              <option value="CRITICAL">CRITICAL Only</option>
+            </select>
+            <input type="text" id="log-search-input" class="input-element input-compact" placeholder="Filter text / trace...">
+            <button class="btn btn-secondary btn-sm" id="btn-copy-log-stream">Copy for ProdPilot</button>
+            <button class="btn btn-secondary btn-sm" id="btn-clear-log-stream">Clear</button>
+          </div>
+        </div>
+
+        <div class="terminal-window">
+          <div class="terminal-bar">
+            <div class="terminal-dots">
+              <span class="dot red"></span>
+              <span class="dot yellow"></span>
+              <span class="dot green"></span>
             </div>
-
-            <div class="stats-grid">
-              <div class="stat-item">
-                <span class="stat-label">Received</span>
-                <span class="stat-value" id="rx-progress-pct">0%</span>
-              </div>
-              <div class="stat-item">
-                <span class="stat-label">Chunks Stored</span>
-                <span class="stat-value" id="rx-chunks-count">0 / 0</span>
-              </div>
-              <div class="stat-item">
-                <span class="stat-label">Missing Chunks</span>
-                <span class="stat-value text-warning" id="rx-missing-count">0</span>
-              </div>
-              <div class="stat-item">
-                <span class="stat-label">Status</span>
-                <span class="stat-value" id="rx-stream-status">Waiting</span>
-              </div>
-            </div>
-
-            <div class="progress-bar-container">
-              <div class="progress-bar-fill progress-fill-emerald" id="rx-progress-bar" style="width: 0%"></div>
-            </div>
-
-            <div class="chunk-matrix-section">
-              <div class="matrix-header">
-                <span class="matrix-title">Receiver Chunk Assembly</span>
-                <div class="matrix-legend">
-                  <span class="legend-item"><span class="legend-dot dot-pending"></span> Missing</span>
-                  <span class="legend-item"><span class="legend-dot dot-acked"></span> Received on Disk</span>
-                </div>
-              </div>
-              <div class="chunk-grid" id="rx-chunk-grid">
-                <div class="grid-empty-state">Connect to a transfer session to visualize chunks</div>
-              </div>
+            <div class="terminal-title">chunkstream.service • stdout + buffer</div>
+            <div class="terminal-status"><span class="pulse-dot green"></span> Stream Live</div>
+          </div>
+          <div class="terminal-body" id="log-terminal-body">
+            <div class="log-line log-info">
+              <span class="log-timestamp">[System]</span>
+              <span class="log-tag">[INIT]</span>
+              <span class="log-content">Observability stream attached. Polling /api/logs every 2s...</span>
             </div>
           </div>
         </div>
       </section>
 
-      <!-- 3. FAILURE LAB & LOGS TAB -->
-      <section class="tab-panel" id="panel-control">
-        <div class="control-layout">
-          <!-- Failure Triggers Grid -->
-          <div class="card glass-card">
-            <div class="card-header-split">
-              <div>
-                <h2 class="card-title">ProdPilot Incident Generator</h2>
-                <p class="card-desc">Trigger reproducible production faults to test ProdPilot log ingestion, fingerprinting, and recovery.</p>
-              </div>
-              <button class="btn btn-sm btn-secondary" id="btn-reset-scenarios">Reset All to Normal</button>
-            </div>
+      <!-- SECTION 4: ARCHITECTURE & API -->
+      <section class="section-container" id="architecture-section">
+        <div class="section-header">
+          <div>
+            <h2 class="section-title">Architecture & Protocol Specification</h2>
+            <p class="section-desc">How ChunkStream splits, verifies, tracks, and resumes transfers across devices.</p>
+          </div>
+        </div>
 
-            <div class="scenarios-grid">
-              <!-- F3: Low Error -->
-              <div class="scenario-card" id="card-f3">
-                <div class="scenario-badge badge-warning">F3 • Low Error</div>
-                <h3 class="scenario-name">Transient Packet/Chunk Drop</h3>
-                <p class="scenario-desc">Simulates intermittent 20% chunk transmission drops. Triggers retry logic; transfer survives.</p>
-                <button class="btn btn-sm btn-outline-warning" id="trigger-f3-btn">Inject Low Errors</button>
-              </div>
-
-              <!-- F4: High Error -->
-              <div class="scenario-card" id="card-f4">
-                <div class="scenario-badge badge-danger">F4 • High Error</div>
-                <h3 class="scenario-name">Repeated Chunk Failure Storm</h3>
-                <p class="scenario-desc">Simulates heavy 75% chunk corruption. Generates high-severity error logs for ProdPilot alert triage.</p>
-                <button class="btn btn-sm btn-outline-danger" id="trigger-f4-btn">Inject High Errors</button>
-              </div>
-
-              <!-- F5: Disconnect -->
-              <div class="scenario-card" id="card-f5">
-                <div class="scenario-badge badge-info">F5 • Network Drop</div>
-                <h3 class="scenario-name">Abrupt Receiver Disconnect</h3>
-                <p class="scenario-desc">Drops receiver WebSocket connection mid-transfer to test reconnect and resume.</p>
-                <button class="btn btn-sm btn-outline-info" id="trigger-f5-btn">Drop Connection</button>
-              </div>
-
-              <!-- F6: Resume Failure -->
-              <div class="scenario-card" id="card-f6">
-                <div class="scenario-badge badge-danger">F6 • Resume Conflict</div>
-                <h3 class="scenario-name">Corrupt Resume Handshake</h3>
-                <p class="scenario-desc">Simulates hash mismatch or invalid metadata state during resume request.</p>
-                <button class="btn btn-sm btn-outline-danger" id="trigger-f6-btn">Trigger Resume Failure</button>
-              </div>
-
-              <!-- F1: Health Degraded -->
-              <div class="scenario-card" id="card-f1">
-                <div class="scenario-badge badge-critical">F1 • Service Outage</div>
-                <h3 class="scenario-name">Degrade Health Check (503)</h3>
-                <p class="scenario-desc">Causes /health to return 503 Service Unavailable for watchdog & synthetic uptime testing.</p>
-                <button class="btn btn-sm btn-outline-danger" id="trigger-f1-btn">Degrade /health</button>
-              </div>
-
-              <!-- F2: Server Crash -->
-              <div class="scenario-card" id="card-f2">
-                <div class="scenario-badge badge-critical">F2 • Fatal Crash</div>
-                <h3 class="scenario-name">Kill Process (Crash Server)</h3>
-                <p class="scenario-desc">Emits critical FATAL crash log and calls os._exit(1) to test supervisor auto-restart.</p>
-                <button class="btn btn-sm btn-danger" id="trigger-f2-btn">Crash Backend (F2)</button>
-              </div>
-            </div>
+        <div class="arch-cards-grid">
+          <div class="arch-card glass-panel">
+            <h3 class="arch-card-title">Transfer Protocol Pipeline</h3>
+            <ol class="protocol-steps">
+              <li>
+                <strong>1. Slicing & Hash Header:</strong> File is partitioned into fixed-size chunks (e.g. 256 KB). SHA-256 is computed for each chunk and for the entire payload.
+              </li>
+              <li>
+                <strong>2. SQLite Ledger:</strong> Session is registered in <code>transfers</code> table. Incoming chunks are saved as discrete <code>.part</code> files and indexed in <code>chunks</code>.
+              </li>
+              <li>
+                <strong>3. Real-Time WebSocket Relay:</strong> Chunks are streamed through <code>/ws/transfer/{id}</code>. Sender receives immediate ACKs; Receiver receives chunk payloads.
+              </li>
+              <li>
+                <strong>4. Reassembly & Integrity Verification:</strong> Upon receiving all chunks, the server concatenates <code>.part</code> files into the final file and verifies the combined SHA-256 digest.
+              </li>
+              <li>
+                <strong>5. Interruption & Resumption:</strong> If a connection drops, Receiver emits <code>{"type": "resume_request"}</code>. Server calculates set difference <code>(total_chunks - acknowledged_chunks)</code> and instructs Sender to re-stream only the missing set.
+              </li>
+            </ol>
           </div>
 
-          <!-- Live Log Console -->
-          <div class="card glass-card console-card">
-            <div class="console-header">
-              <div class="console-title-group">
-                <span class="console-dot"></span>
-                <h2 class="card-title">Application Logs (ProdPilot Ingestion Stream)</h2>
+          <div class="arch-card glass-panel">
+            <h3 class="arch-card-title">ProdPilot REST API Reference</h3>
+            <div class="api-endpoints-table">
+              <div class="api-row">
+                <span class="api-method get">GET</span>
+                <span class="api-path">/api/health</span>
+                <span class="api-desc">Uptime probe (200 OK / 503 Outage)</span>
               </div>
-              <div class="console-actions">
-                <select id="log-filter-select" class="custom-select select-sm">
-                  <option value="">All Levels</option>
-                  <option value="INFO">INFO & Up</option>
-                  <option value="WARNING">WARNING & Up</option>
-                  <option value="ERROR">ERROR & Up</option>
-                  <option value="CRITICAL">CRITICAL Only</option>
-                </select>
-                <button class="btn btn-sm btn-secondary" id="btn-copy-logs">Copy Logs</button>
-                <button class="btn btn-sm btn-secondary" id="btn-clear-console">Clear View</button>
+              <div class="api-row">
+                <span class="api-method get">GET</span>
+                <span class="api-path">/api/logs?limit=100&min_level=ERROR</span>
+                <span class="api-desc">ProdPilot log batch ingestion</span>
               </div>
-            </div>
-            
-            <div class="log-stream-box" id="log-stream-box">
-              <div class="log-entry log-entry-info">
-                <span class="log-time">[System]</span>
-                <span class="log-level">[INFO]</span>
-                <span class="log-msg">Log streamer ready. Monitoring app logs in real time...</span>
+              <div class="api-row">
+                <span class="api-method post">POST</span>
+                <span class="api-path">/api/test/fail</span>
+                <span class="api-desc">Injects failure scenario (F1, F3, F4, F6)</span>
+              </div>
+              <div class="api-row">
+                <span class="api-method post">POST</span>
+                <span class="api-path">/api/test/crash</span>
+                <span class="api-desc">Simulates fatal unhandled crash (F2)</span>
+              </div>
+              <div class="api-row">
+                <span class="api-method get">GET</span>
+                <span class="api-path">/api/transfers/{id}</span>
+                <span class="api-desc">Retrieves acknowledged & missing chunk lists</span>
+              </div>
+              <div class="api-row">
+                <span class="api-method ws">WS</span>
+                <span class="api-path">/ws/transfer/{id}?role=sender|receiver</span>
+                <span class="api-desc">Bidirectional streaming & relay socket</span>
               </div>
             </div>
           </div>
@@ -385,8 +536,12 @@
 
     <!-- Footer -->
     <footer class="app-footer">
-      <span>ChunkStream • Testbed for <strong>ProdPilot</strong> Incident Detection</span>
-      <span>FastAPI + WebSockets + SQLite • Render Ready</span>
+      <div class="footer-left">
+        <span class="footer-brand">ChunkStream</span> — Resumable Chunk Relay for <strong>ProdPilot</strong> testing.
+      </div>
+      <div class="footer-right">
+        <span>FastAPI</span> • <span>WebSockets</span> • <span>SQLite</span> • <span>Render Ready</span>
+      </div>
     </footer>
   </div>
 
