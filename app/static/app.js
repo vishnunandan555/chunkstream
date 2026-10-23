@@ -1,4 +1,20 @@
-// ChunkStream Minimal Frontend Logic
+// ChunkStream Minimal Frontend Logic with Speed & Peer Names
+
+const ADJECTIVES = ['Brave', 'Swift', 'Cosmic', 'Silent', 'Neon', 'Solar', 'Lunar', 'Electric', 'Clever', 'Amber', 'Mystic', 'Frost', 'Bold', 'Agile', 'Shadow', 'Velvet'];
+const ANIMALS = ['Falcon', 'Otter', 'Lynx', 'Dolphin', 'Fox', 'Eagle', 'Hawk', 'Badger', 'Panda', 'Tiger', 'Wolf', 'Phoenix', 'Rabbit', 'Owl', 'Panther', 'Koala'];
+
+function generateRandomPeerName() {
+  const adj = ADJECTIVES[Math.floor(Math.random() * ADJECTIVES.length)];
+  const animal = ANIMALS[Math.floor(Math.random() * ANIMALS.length)];
+  return `${adj} ${animal}`;
+}
+
+let myPeerName = sessionStorage.getItem('cs_peer_name');
+if (!myPeerName) {
+  myPeerName = generateRandomPeerName();
+  sessionStorage.setItem('cs_peer_name', myPeerName);
+}
+document.getElementById('global-peer-name').textContent = myPeerName;
 
 let currentFile = null;
 let currentCode = null;
@@ -10,6 +26,12 @@ let totalChunks = 0;
 let ackedChunks = new Set();
 let inFlightChunks = new Set();
 let bytesSent = 0;
+let senderStartTime = 0;
+
+let rxBytesReceived = 0;
+let rxStartTime = 0;
+let rxPendingDownloadUrl = null;
+let rxPendingFilename = null;
 
 // Format helper
 function formatBytes(bytes) {
@@ -60,7 +82,9 @@ const senderStatusDot = document.getElementById('sender-status-dot');
 const senderProgressBox = document.getElementById('sender-progress-box');
 const senderProgressFill = document.getElementById('sender-progress-fill');
 const senderProgressPct = document.getElementById('sender-progress-pct');
+const senderSpeed = document.getElementById('sender-speed');
 const senderProgressDetails = document.getElementById('sender-progress-details');
+const senderChunkDetails = document.getElementById('sender-chunk-details');
 const btnSendAgain = document.getElementById('btn-send-again');
 
 // Receiver Elements
@@ -71,10 +95,16 @@ const btnStartReceive = document.getElementById('btn-start-receive');
 const rxFileName = document.getElementById('rx-file-name');
 const rxFileSize = document.getElementById('rx-file-size');
 const rxStatusText = document.getElementById('rx-status-text');
+const rxStatusSub = document.getElementById('rx-status-sub');
+const rxProgressBox = document.getElementById('rx-progress-box');
 const rxProgressFill = document.getElementById('rx-progress-fill');
 const rxProgressPct = document.getElementById('rx-progress-pct');
+const rxSpeed = document.getElementById('rx-speed');
 const rxProgressDetails = document.getElementById('rx-progress-details');
-const rxDownloadLink = document.getElementById('rx-download-link');
+const rxChunkDetails = document.getElementById('rx-chunk-details');
+const rxDownloadReadyBox = document.getElementById('rx-download-ready-box');
+const btnTriggerDownload = document.getElementById('btn-trigger-download');
+const rxClearedBox = document.getElementById('rx-cleared-box');
 const btnReceiveAgain = document.getElementById('btn-receive-again');
 
 // Navigation between views
@@ -161,7 +191,7 @@ async function handleFileSelected(file) {
   senderStepPick.classList.add('hidden');
   senderStepTransfer.classList.remove('hidden');
   senderStatusText.textContent = 'Waiting for receiver to connect...';
-  senderStatusSub.textContent = 'Transfer will begin automatically once receiver enters this code';
+  senderStatusSub.textContent = `You are ${myPeerName}. Transfer begins once receiver connects`;
   senderStatusDot.className = 'pulse-dot';
   senderProgressBox.classList.add('hidden');
   btnSendAgain.classList.add('hidden');
@@ -191,14 +221,21 @@ function connectSenderWebSocket() {
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
   senderWs = new WebSocket(`${protocol}//${window.location.host}/ws/transfer/${currentCode}?role=sender`);
 
+  senderWs.onopen = () => {
+    // Announce peer name
+    senderWs.send(JSON.stringify({ type: 'peer_info', peer_name: myPeerName, role: 'sender' }));
+  };
+
   senderWs.onmessage = (e) => {
     try {
       const msg = JSON.parse(e.data);
       // Transfer ONLY starts when receiver connects and requests chunks!
       if (msg.type === 'peer_connected' && msg.role === 'receiver') {
-        startStreamingChunks();
+        startStreamingChunks(null, msg.peer_name);
       } else if (msg.type === 'request_missing' || msg.type === 'receiver_ready') {
-        startStreamingChunks(msg.missing_chunks);
+        startStreamingChunks(msg.missing_chunks, msg.peer_name);
+      } else if (msg.type === 'peer_info' && msg.role === 'receiver') {
+        senderStatusSub.textContent = `Connected to ${msg.peer_name || 'receiver'}`;
       } else if (msg.type === 'chunk_ack') {
         handleChunkAck(msg.index);
       }
@@ -208,11 +245,13 @@ function connectSenderWebSocket() {
   };
 }
 
-function startStreamingChunks(missing) {
+function startStreamingChunks(missing, peerName) {
   if (isStreaming) return;
   isStreaming = true;
+  senderStartTime = Date.now();
 
-  senderStatusText.textContent = 'Receiver connected! Sending file...';
+  const receiverLabel = peerName ? `to ${peerName}` : 'to receiver';
+  senderStatusText.textContent = `Connected! Sending file ${receiverLabel}...`;
   senderStatusSub.textContent = 'Streaming chunks in real time';
   senderStatusDot.className = 'pulse-dot green';
   senderProgressBox.classList.remove('hidden');
@@ -230,7 +269,7 @@ async function streamFileChunks(missingList) {
 
     // Concurrency limit
     while (inFlightChunks.size >= 3) {
-      await new Promise(r => setTimeout(r, 25));
+      await new Promise(r => setTimeout(r, 20));
     }
 
     inFlightChunks.add(idx);
@@ -249,7 +288,7 @@ async function streamFileChunks(missingList) {
       }));
     }
 
-    await new Promise(r => setTimeout(r, 15));
+    await new Promise(r => setTimeout(r, 10));
   }
 }
 
@@ -261,11 +300,20 @@ function handleChunkAck(index) {
   const pct = Math.round((ackedChunks.size / totalChunks) * 100);
   senderProgressFill.style.width = `${pct}%`;
   senderProgressPct.textContent = `${pct}%`;
+
+  // Calculate speed
+  const elapsedSec = (Date.now() - senderStartTime) / 1000;
+  if (elapsedSec > 0.3) {
+    const mbps = ((bytesSent / (1024 * 1024)) / elapsedSec).toFixed(1);
+    senderSpeed.textContent = `${mbps} MB/s`;
+  }
+
   senderProgressDetails.textContent = `${formatBytes(bytesSent)} / ${formatBytes(currentFile.size)}`;
+  senderChunkDetails.textContent = `Chunk ${ackedChunks.size}/${totalChunks}`;
 
   if (ackedChunks.size === totalChunks) {
     senderStatusText.textContent = '✓ Transfer complete!';
-    senderStatusSub.textContent = 'Receiver has successfully downloaded the file';
+    senderStatusSub.textContent = 'All chunks uploaded and verified';
     btnSendAgain.classList.remove('hidden');
     if (senderWs && senderWs.readyState === WebSocket.OPEN) {
       senderWs.send(JSON.stringify({ type: 'complete' }));
@@ -319,8 +367,16 @@ async function startReceiving() {
     receiverStepInput.classList.add('hidden');
     receiverStepTransfer.classList.remove('hidden');
     rxStatusText.textContent = 'Connecting to sender...';
+    rxStatusSub.textContent = `You are ${myPeerName}`;
     rxProgressFill.style.width = '0%';
     rxProgressPct.textContent = '0%';
+    rxSpeed.textContent = '0.0 MB/s';
+    rxProgressBox.classList.remove('hidden');
+    rxDownloadReadyBox.classList.add('hidden');
+    rxClearedBox.classList.add('hidden');
+
+    rxStartTime = Date.now();
+    rxBytesReceived = 0;
 
     connectReceiverWebSocket(code, data);
   } catch (err) {
@@ -337,25 +393,41 @@ function connectReceiverWebSocket(code, transferData) {
 
   receiverWs.onopen = () => {
     rxStatusText.textContent = 'Receiving file...';
-    // Tell sender to start!
-    receiverWs.send(JSON.stringify({ type: 'resume_request' }));
+    // Tell sender we are ready and announce name
+    receiverWs.send(JSON.stringify({ 
+      type: 'resume_request', 
+      peer_name: myPeerName 
+    }));
   };
 
   receiverWs.onmessage = (e) => {
     try {
       const msg = JSON.parse(e.data);
-      if (msg.type === 'chunk_data') {
+      if (msg.type === 'peer_info' && msg.role === 'sender') {
+        rxStatusSub.textContent = `Receiving from ${msg.peer_name || 'sender'}`;
+      } else if (msg.type === 'chunk_data') {
         receivedChunks.add(msg.index);
+        rxBytesReceived = Math.min(receivedChunks.size * transferData.chunk_size, transferData.filesize);
+
         const pct = Math.round((receivedChunks.size / total) * 100);
         rxProgressFill.style.width = `${pct}%`;
         rxProgressPct.textContent = `${pct}%`;
-        rxProgressDetails.textContent = `${formatBytes(receivedChunks.size * transferData.chunk_size)} / ${formatBytes(transferData.filesize)}`;
+
+        // Calculate speed
+        const elapsedSec = (Date.now() - rxStartTime) / 1000;
+        if (elapsedSec > 0.3) {
+          const mbps = ((rxBytesReceived / (1024 * 1024)) / elapsedSec).toFixed(1);
+          rxSpeed.textContent = `${mbps} MB/s`;
+        }
+
+        rxProgressDetails.textContent = `${formatBytes(rxBytesReceived)} / ${formatBytes(transferData.filesize)}`;
+        rxChunkDetails.textContent = `Chunk ${receivedChunks.size}/${total}`;
 
         if (receivedChunks.size === total) {
-          triggerAutoDownload(code, transferData.filename);
+          showDownloadReady(code, transferData.filename);
         }
       } else if (msg.type === 'completed') {
-        triggerAutoDownload(code, transferData.filename);
+        showDownloadReady(code, transferData.filename);
       }
     } catch (err) {
       console.warn("Receiver WS error:", err);
@@ -363,25 +435,41 @@ function connectReceiverWebSocket(code, transferData) {
   };
 }
 
-function triggerAutoDownload(code, filename) {
-  rxStatusText.textContent = '✓ Download complete!';
+function showDownloadReady(code, filename) {
+  rxStatusText.textContent = '✓ File received!';
+  rxStatusSub.textContent = 'Assembled and verified on server';
   rxProgressFill.style.width = '100%';
   rxProgressPct.textContent = '100%';
 
-  const downloadUrl = `/api/transfers/${code}/download`;
-  rxDownloadLink.href = downloadUrl;
-  rxDownloadLink.download = filename;
-  rxDownloadLink.classList.remove('hidden');
-  btnReceiveAgain.classList.remove('hidden');
+  rxPendingDownloadUrl = `/api/transfers/${code}/download`;
+  rxPendingFilename = filename;
 
-  // Trigger automatic download
+  // Show "Click here to download" button (do NOT auto-download yet!)
+  rxDownloadReadyBox.classList.remove('hidden');
+}
+
+// User clicks download -> file is downloaded by browser -> then cleared!
+btnTriggerDownload.addEventListener('click', () => {
+  if (!rxPendingDownloadUrl) return;
+
+  // 1. Trigger browser file download
   const tempLink = document.createElement('a');
-  tempLink.href = downloadUrl;
-  tempLink.download = filename;
+  tempLink.href = rxPendingDownloadUrl;
+  tempLink.download = rxPendingFilename || 'download';
   document.body.appendChild(tempLink);
   tempLink.click();
   document.body.removeChild(tempLink);
-}
+
+  // 2. Clear receiver view and show completion
+  rxDownloadReadyBox.classList.add('hidden');
+  rxProgressBox.classList.add('hidden');
+  rxStatusText.textContent = '';
+  rxStatusSub.textContent = '';
+  rxClearedBox.classList.remove('hidden');
+
+  rxPendingDownloadUrl = null;
+  rxPendingFilename = null;
+});
 
 btnReceiveAgain.addEventListener('click', () => {
   resetReceiver();
@@ -396,8 +484,9 @@ function resetReceiver() {
   receiveCodeInput.value = '';
   receiverStepInput.classList.remove('hidden');
   receiverStepTransfer.classList.add('hidden');
-  rxDownloadLink.classList.add('hidden');
-  btnReceiveAgain.classList.add('hidden');
+  rxDownloadReadyBox.classList.add('hidden');
+  rxClearedBox.classList.add('hidden');
+  rxProgressBox.classList.remove('hidden');
 }
 
 function resetAll() {

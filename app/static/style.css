@@ -34,11 +34,15 @@ body {
   max-width: 440px;
   display: flex;
   flex-direction: column;
-  gap: 28px;
+  gap: 24px;
 }
 
 .header {
   text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
 }
 
 .logo {
@@ -54,7 +58,30 @@ body {
 .tagline {
   font-size: 0.88rem;
   color: var(--text-muted);
-  margin-top: 4px;
+}
+
+.peer-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--card-border);
+  padding: 4px 12px;
+  border-radius: 999px;
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  margin-top: 6px;
+}
+
+.peer-badge strong {
+  color: var(--text-main);
+}
+
+.peer-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background-color: var(--accent-cyan);
 }
 
 .main {
@@ -277,11 +304,15 @@ body {
   color: var(--text-muted);
 }
 
-/* Progress */
+/* Progress & Stats */
 .progress-container {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 6px;
+  background: rgba(0, 0, 0, 0.25);
+  padding: 14px 16px;
+  border-radius: 12px;
+  border: 1px solid var(--card-border);
 }
 
 .progress-bar {
@@ -290,24 +321,52 @@ body {
   background: rgba(255, 255, 255, 0.08);
   border-radius: 999px;
   overflow: hidden;
+  margin-bottom: 2px;
 }
 
 .progress-fill {
   height: 100%;
   background: linear-gradient(90deg, var(--accent-cyan), var(--accent-blue));
-  transition: width 0.2s ease;
+  transition: width 0.15s ease;
 }
 
 .green-fill {
   background: linear-gradient(90deg, var(--accent-green), var(--accent-cyan));
 }
 
-.progress-info {
+.stats-row {
   display: flex;
   justify-content: space-between;
-  font-size: 0.8rem;
+  align-items: baseline;
   font-family: var(--font-mono);
+  font-size: 0.85rem;
+}
+
+.stat-pct {
+  font-weight: 700;
+  color: #fff;
+  font-size: 1rem;
+}
+
+.stat-speed {
+  color: var(--accent-cyan);
+  font-weight: 600;
+}
+
+.sub-row {
+  font-size: 0.75rem;
   color: var(--text-muted);
+}
+
+/* Receiver Ready to Download */
+.download-ready-box {
+  margin-top: 4px;
+}
+
+.btn-large {
+  padding: 16px 20px;
+  font-size: 1.05rem;
+  box-shadow: 0 0 20px rgba(16, 185, 129, 0.3);
 }
 
 /* Receiver Input */

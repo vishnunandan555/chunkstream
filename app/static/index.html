@@ -15,6 +15,10 @@
     <header class="header">
       <h1 class="logo" id="home-link">ChunkStream</h1>
       <p class="tagline">Minimal, direct file transfer</p>
+      <div class="peer-badge">
+        <span class="peer-dot"></span>
+        <span>You are <strong id="global-peer-name">...</strong></span>
+      </div>
     </header>
 
     <main class="main">
@@ -87,9 +91,13 @@
               <div class="progress-bar">
                 <div class="progress-fill" id="sender-progress-fill" style="width: 0%"></div>
               </div>
-              <div class="progress-info">
-                <span id="sender-progress-pct">0%</span>
+              <div class="stats-row">
+                <span class="stat-pct" id="sender-progress-pct">0%</span>
+                <span class="stat-speed" id="sender-speed">0.0 MB/s</span>
+              </div>
+              <div class="stats-row sub-row">
                 <span id="sender-progress-details">0 / 0 MB</span>
+                <span id="sender-chunk-details">Chunk 0/0</span>
               </div>
             </div>
 
@@ -122,23 +130,36 @@
                 <span class="pulse-dot green" id="rx-status-dot"></span>
                 <span class="status-text" id="rx-status-text">Connecting to sender...</span>
               </div>
+              <p class="status-sub" id="rx-status-sub">Connecting to peer...</p>
             </div>
 
+            <!-- In-Flight Transfer Progress & Speed -->
             <div class="progress-container" id="rx-progress-box">
               <div class="progress-bar">
                 <div class="progress-fill green-fill" id="rx-progress-fill" style="width: 0%"></div>
               </div>
-              <div class="progress-info">
-                <span id="rx-progress-pct">0%</span>
+              <div class="stats-row">
+                <span class="stat-pct" id="rx-progress-pct">0%</span>
+                <span class="stat-speed" id="rx-speed">0.0 MB/s</span>
+              </div>
+              <div class="stats-row sub-row">
                 <span id="rx-progress-details">-</span>
+                <span id="rx-chunk-details">Chunk 0/0</span>
               </div>
             </div>
 
-            <a id="rx-download-link" class="btn btn-primary hidden" download>
-              Download File
-            </a>
+            <!-- Ready To Download Step: Only downloaded when clicked! -->
+            <div id="rx-download-ready-box" class="download-ready-box hidden">
+              <button type="button" class="btn btn-primary btn-large" id="btn-trigger-download">
+                Click here to download
+              </button>
+            </div>
 
-            <button type="button" class="btn btn-secondary hidden" id="btn-receive-again">Receive Another File</button>
+            <!-- Cleared / Done State -->
+            <div id="rx-cleared-box" class="status-box hidden">
+              <div class="status-text" style="color: var(--accent-green);">✓ File downloaded to your browser!</div>
+              <button type="button" class="btn btn-secondary" id="btn-receive-again">Receive Another File</button>
+            </div>
           </div>
 
           <button type="button" class="btn-back" id="btn-back-from-receive">← Back</button>

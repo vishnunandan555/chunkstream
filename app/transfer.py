@@ -366,6 +366,7 @@ async def handle_websocket_message(websocket: WebSocket, raw_message: str) -> No
             )
         )
 
+        peer_name = data.get("peer_name")
         # Tell sender what chunks are missing so it can stream only missing chunks
         await manager.send_to_role(
             transfer_id,
@@ -374,10 +375,15 @@ async def handle_websocket_message(websocket: WebSocket, raw_message: str) -> No
                 "type": "request_missing",
                 "transfer_id": transfer_id,
                 "missing_chunks": transfer_info["missing_chunks"],
+                "peer_name": peer_name,
             },
         )
 
-    # 3. Assemble complete file
+    # 3. Peer info exchange (random names)
+    elif msg_type == "peer_info":
+        await manager.broadcast(transfer_id, data)
+
+    # 4. Assemble complete file
     elif msg_type == "complete":
         logger.info("Transfer completion signal received for %s", transfer_id)
         success, out_path, err = assemble_file(transfer_id)
