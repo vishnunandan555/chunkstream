@@ -77,9 +77,8 @@ app.add_middleware(
 
 
 def generate_transfer_id() -> str:
-    """Generates a memorable transfer ID like CS-7A2B."""
-    suffix = "".join(secrets.choice(string.ascii_uppercase + string.digits) for _ in range(4))
-    return f"CS-{suffix}"
+    """Generates a clean 4-digit transfer code like 7492."""
+    return f"{secrets.randbelow(9000) + 1000}"
 
 
 # Pydantic Models
