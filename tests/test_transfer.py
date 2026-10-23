@@ -230,3 +230,147 @@ def test_websocket_missing_receiver_and_ack_timeout():
                 _ = sender_ws.receive_json()
 
         assert "ReceiverAckTimeoutError" in str(exc_timeout.value)
+
+
+def test_path_traversal_sanitization():
+    transfer_id = "TEST-SEC-TRAVERSAL"
+    init_res = client.post(
+        "/api/transfers",
+        json={
+            "transfer_id": transfer_id,
+            "filename": "../../../../etc/passwd",
+            "filesize": 12,
+            "chunk_size": 6,
+            "total_chunks": 2,
+        },
+    )
+    assert init_res.status_code == 200
+    data = init_res.json()
+    assert data["filename"] == "passwd"
+    assert ".." not in data["filename"]
+
+    # Upload chunks
+    c0 = client.post(f"/api/transfers/{transfer_id}/chunks/0", content=b"root:x")
+    c1 = client.post(f"/api/transfers/{transfer_id}/chunks/1", content=b":0:0::")
+    assert c0.status_code == 200
+    assert c1.status_code == 200
+
+    # Assemble and download
+    asm_res = client.post(f"/api/transfers/{transfer_id}/assemble")
+    assert asm_res.status_code == 200
+
+    dl_res = client.get(f"/api/transfers/{transfer_id}/download")
+    assert dl_res.status_code == 200
+    assert dl_res.content == b"root:x:0:0::"
+
+
+def test_crash_endpoints_gated_by_default():
+    # Destructive crash endpoint must return 403 Forbidden without ALLOW_SIM_CRASH or X-Admin-Key
+    res = client.post("/api/test/crash")
+    assert res.status_code == 403
+    assert "Destructive crash endpoint disabled" in res.json()["detail"]
+
+    res_oom = client.post("/api/test/crash/oom")
+    assert res_oom.status_code == 403
+
+    res_deadlock = client.post("/api/test/crash/deadlock")
+    assert res_deadlock.status_code == 403
+
+
+def test_prometheus_metrics_endpoint():
+    res = client.get("/metrics")
+    assert res.status_code == 200
+    assert "text/plain" in res.headers["content-type"]
+    text = res.text
+    assert "http_requests_total" in text
+    assert "chunkstream_ws_active_connections" in text
+
+
+def test_websocket_resume_flow():
+    import base64
+    import json
+
+    transfer_id = "TEST-RESUME-E2E"
+    chunk_payloads = [b"PART_0_", b"PART_1_", b"PART_2_", b"PART_3_"]
+    full_payload = b"".join(chunk_payloads)
+    file_hash = hashlib.sha256(full_payload).hexdigest()
+
+    create_transfer(
+        transfer_id=transfer_id,
+        filename="resume_test.txt",
+        filesize=len(full_payload),
+        chunk_size=7,
+        total_chunks=4,
+        checksum=file_hash,
+    )
+
+    # 1. Receiver connects first
+    with client.websocket_connect(f"/ws/transfer/{transfer_id}?role=receiver") as rx_ws:
+        _ = rx_ws.receive_json()  # peer_connected
+
+        # 2. Sender connects
+        with client.websocket_connect(f"/ws/transfer/{transfer_id}?role=sender") as sender_ws:
+            _ = sender_ws.receive_json()  # peer_connected on sender
+            _ = rx_ws.receive_json()      # peer_connected on rx
+
+            # Stream chunks 0 and 1
+            for idx in (0, 1):
+                sender_ws.send_json({
+                    "type": "chunk",
+                    "index": idx,
+                    "total": 4,
+                    "data": base64.b64encode(chunk_payloads[idx]).decode("utf-8"),
+                    "hash": hashlib.sha256(chunk_payloads[idx]).hexdigest(),
+                })
+                # Sender gets ack and progress
+                _ = sender_ws.receive_json()
+                _ = sender_ws.receive_json()
+                # Rx gets chunk_data and progress
+                rx_chunk = rx_ws.receive_json()
+                assert rx_chunk["type"] == "chunk_data"
+                assert rx_chunk["index"] == idx
+                _ = rx_ws.receive_json()
+
+                # Rx ACKs chunk
+                rx_ws.send_json({"type": "rx_ack", "index": idx})
+
+            # 3. Simulate receiver initiating resume handshake
+            rx_ws.send_json({"type": "resume_request", "peer_name": "TestReceiver"})
+            resume_state = rx_ws.receive_json()
+            assert resume_state["type"] == "resume_state"
+            assert resume_state["acknowledged_chunks"] == [0, 1]
+            assert resume_state["missing_chunks"] == [2, 3]
+
+            # Sender receives missing chunk request
+            missing_req = sender_ws.receive_json()
+            assert missing_req["type"] == "request_missing"
+            assert missing_req["missing_chunks"] == [2, 3]
+
+            # 4. Sender streams missing chunks 2 and 3
+            for idx in (2, 3):
+                sender_ws.send_json({
+                    "type": "chunk",
+                    "index": idx,
+                    "total": 4,
+                    "data": base64.b64encode(chunk_payloads[idx]).decode("utf-8"),
+                    "hash": hashlib.sha256(chunk_payloads[idx]).hexdigest(),
+                })
+                _ = sender_ws.receive_json()
+                _ = sender_ws.receive_json()
+                rx_chunk = rx_ws.receive_json()
+                assert rx_chunk["index"] == idx
+                _ = rx_ws.receive_json()
+                rx_ws.send_json({"type": "rx_ack", "index": idx})
+
+            # 5. Sender signals complete
+            sender_ws.send_json({"type": "complete"})
+            comp_msg_sender = sender_ws.receive_json()
+            assert comp_msg_sender["type"] == "completed"
+
+            comp_msg_rx = rx_ws.receive_json()
+            assert comp_msg_rx["type"] == "completed"
+
+    # 6. Verify assembled file download
+    dl_res = client.get(f"/api/transfers/{transfer_id}/download")
+    assert dl_res.status_code == 200
+    assert dl_res.content == full_payload

@@ -151,6 +151,28 @@ class ConnectionManager:
         # AckTracker manages unacknowledged chunk streaks per transfer
         self.unacked_streak: AckTracker = AckTracker()
 
+    def get_total_active_connections(self) -> int:
+        """Returns total active WebSocket connection count across all transfers."""
+        return sum(len(ws_set) for ws_set in self.active_connections.values())
+
+    async def close_all(self, reason: str = "server_shutdown") -> None:
+        """Drains and gracefully closes all active WebSocket connections during shutdown."""
+        payload = json.dumps({"type": "server_shutdown", "reason": reason})
+        all_sockets = [
+            ws
+            for ws_set in list(self.active_connections.values())
+            for ws in list(ws_set)
+        ]
+        for ws in all_sockets:
+            try:
+                await ws.send_text(payload)
+                await ws.close(code=1001, reason=reason)
+            except Exception:
+                pass
+        self.active_connections.clear()
+        self.connection_meta.clear()
+        logger.info("Gracefully closed all %d active WebSocket connections", len(all_sockets))
+
     def has_role(self, transfer_id: str, role: str) -> bool:
         """Checks if at least one peer with the given role is actively connected."""
         if transfer_id not in self.active_connections:

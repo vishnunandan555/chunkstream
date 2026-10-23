@@ -418,7 +418,9 @@ if (btnResumeSend) {
         startStreamingChunks(info.missing_chunks);
       }
     } catch (err) {
-      console.error('Resume error:', err);
+      senderStatusText.textContent = '❌ Resume failed';
+      senderStatusSub.textContent = err.message || 'Could not fetch transfer state from server';
+      if (senderStatusDot) senderStatusDot.className = 'pulse-dot red';
     }
   });
 }
@@ -529,7 +531,10 @@ function connectReceiverWebSocket(code, transferData) {
         showDownloadReady(code, transferData.filename);
       }
     } catch (err) {
-      console.warn("Receiver WS error:", err);
+      rxStatusText.textContent = '⚠️ Protocol error';
+      rxStatusSub.textContent = err.message || 'Error processing transfer message';
+      const rxDot = document.getElementById('rx-status-dot');
+      if (rxDot) rxDot.className = 'pulse-dot red';
     }
   };
 }
@@ -586,9 +591,4 @@ function resetReceiver() {
   rxDownloadReadyBox.classList.add('hidden');
   rxClearedBox.classList.add('hidden');
   rxProgressBox.classList.remove('hidden');
-}
-
-function resetAll() {
-  resetSender();
-  resetReceiver();
 }

@@ -1,7 +1,6 @@
-import time
-from typing import Dict, List, Tuple
-from collections import defaultdict
 import threading
+from collections import defaultdict
+from typing import Dict, List, Tuple
 
 class MetricsCollector:
     """Lightweight in-memory Prometheus metrics registry for ChunkStream."""
@@ -43,8 +42,6 @@ class MetricsCollector:
             for status, count in self.chunk_transfers_total.items():
                 lines.append(f'chunkstream_chunks_total{{status="{status}"}} {count}')
 
-        return "
-".join(lines) + "
-"
+        return "\n".join(lines) + "\n"
 
 metrics = MetricsCollector()
