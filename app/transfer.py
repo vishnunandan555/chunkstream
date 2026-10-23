@@ -68,6 +68,24 @@ class FailureSimulator:
             "delay_ms": self.delay_ms,
         }
 
+    def reset_flag(self, flag: str) -> Dict[str, Any]:
+        """Resets an individual failure simulation flag without clearing other flags."""
+        if flag in ("error_rate", "error_mode"):
+            self.error_rate = 0.0
+            self.error_mode = "none"
+        elif flag == "force_resume_failure":
+            self.force_resume_failure = False
+        elif flag == "force_health_unhealthy":
+            self.force_health_unhealthy = False
+        elif flag == "simulate_storage_error":
+            self.simulate_storage_error = False
+        elif flag == "delay_ms":
+            self.delay_ms = 0
+        else:
+            logger.warning("Unknown simulation flag to reset: %s", flag)
+        logger.info("Reset simulator flag '%s'. Current status: %s", flag, self.get_status())
+        return self.get_status()
+
     def should_fail_chunk(self, chunk_index: int) -> bool:
         if self.error_rate > 0.0:
             if random.random() < self.error_rate:
@@ -85,6 +103,43 @@ class FailureSimulator:
 simulator = FailureSimulator()
 
 
+class AckTracker:
+    """
+    Manages unacknowledged chunk streaks per transfer for backpressure,
+    flow control, and timeout detection.
+    """
+
+    def __init__(self, max_unacked_streak: int = 10) -> None:
+        self.max_unacked_streak = max_unacked_streak
+        self._streaks: Dict[str, int] = {}
+
+    def get(self, transfer_id: str, default: int = 0) -> int:
+        return self._streaks.get(transfer_id, default)
+
+    def increment(self, transfer_id: str) -> int:
+        streak = self._streaks.get(transfer_id, 0) + 1
+        self._streaks[transfer_id] = streak
+        return streak
+
+    def reset(self, transfer_id: str) -> None:
+        self._streaks[transfer_id] = 0
+
+    def remove(self, transfer_id: str) -> None:
+        self._streaks.pop(transfer_id, None)
+
+    def is_timed_out(self, transfer_id: str) -> bool:
+        return self._streaks.get(transfer_id, 0) >= self.max_unacked_streak
+
+    def __getitem__(self, key: str) -> int:
+        return self._streaks.get(key, 0)
+
+    def __setitem__(self, key: str, value: int) -> None:
+        self._streaks[key] = value
+
+    def pop(self, key: str, default: Any = None) -> Any:
+        return self._streaks.pop(key, default)
+
+
 class ConnectionManager:
     """Manages active WebSockets for file transfer relay and progress reporting."""
 
@@ -93,8 +148,8 @@ class ConnectionManager:
         self.active_connections: Dict[str, Set[WebSocket]] = {}
         # websocket -> metadata dict {"transfer_id": str, "role": str}
         self.connection_meta: Dict[WebSocket, Dict[str, str]] = {}
-        # transfer_id -> count of chunks sent without receiver ACK
-        self.unacked_streak: Dict[str, int] = {}
+        # AckTracker manages unacknowledged chunk streaks per transfer
+        self.unacked_streak: AckTracker = AckTracker()
 
     def has_role(self, transfer_id: str, role: str) -> bool:
         """Checks if at least one peer with the given role is actively connected."""
@@ -244,6 +299,14 @@ async def handle_websocket_message(websocket: WebSocket, raw_message: str) -> No
         return
 
     msg_type = data.get("type")
+
+    # Application-level WebSocket heartbeat (ping -> pong)
+    if msg_type == "ping":
+        import time
+        await websocket.send_text(
+            json.dumps({"type": "pong", "timestamp": time.time(), "transfer_id": transfer_id})
+        )
+        return
 
     # Receiver ACK received
     if msg_type == "rx_ack":
