@@ -52,6 +52,10 @@ APP_START_TIME = time.time()
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup
+    setup_logging(
+        log_level=os.environ.get("LOG_LEVEL", "INFO"),
+        log_dir=os.environ.get("LOG_DIR", "logs"),
+    )
     logger.info("Starting ChunkStream v%s", APP_VERSION)
     init_db()
     yield

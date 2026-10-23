@@ -69,6 +69,13 @@ def setup_logging(log_level: str = "INFO", log_dir: str = "logs") -> logging.Log
     root_logger.addHandler(buffer_handler)
 
     app_logger = logging.getLogger("chunkstream")
+    app_logger.setLevel(level)
+    app_logger.handlers.clear()
+    app_logger.addHandler(console_handler)
+    app_logger.addHandler(file_handler)
+    app_logger.addHandler(buffer_handler)
+    app_logger.propagate = False
+
     app_logger.info("Logging configured successfully (file: %s)", log_file_path)
     return app_logger
 
