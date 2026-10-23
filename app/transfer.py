@@ -26,6 +26,7 @@ class FailureSimulator:
         self.force_resume_failure: bool = False
         self.force_health_unhealthy: bool = False
         self.simulate_storage_error: bool = False
+        self.crash_on_disconnect: bool = False
         self.delay_ms: int = 0
 
     def set_scenario(self, scenario: str) -> Dict[str, Any]:
@@ -35,6 +36,7 @@ class FailureSimulator:
             self.force_resume_failure = False
             self.force_health_unhealthy = False
             self.simulate_storage_error = False
+            self.crash_on_disconnect = False
             self.delay_ms = 0
             logger.info("Simulator reset to normal operation (all failure triggers cleared)")
         elif scenario == "low_error":  # F3
@@ -53,6 +55,9 @@ class FailureSimulator:
         elif scenario == "storage_error":
             self.simulate_storage_error = True
             logger.error("[SIMULATION] Storage I/O failure simulation activated")
+        elif scenario == "crash_on_disconnect":
+            self.crash_on_disconnect = True
+            logger.critical("[SIMULATION] Crash-on-disconnect activated (server will terminate if client disconnects mid-transfer)")
         elif scenario == "unhealthy":  # F1
             self.force_health_unhealthy = True
             logger.critical("[SIMULATION F1] Service marked UNHEALTHY (health checks failing 503)")
@@ -65,6 +70,7 @@ class FailureSimulator:
             "force_resume_failure": self.force_resume_failure,
             "force_health_unhealthy": self.force_health_unhealthy,
             "simulate_storage_error": self.simulate_storage_error,
+            "crash_on_disconnect": self.crash_on_disconnect,
             "delay_ms": self.delay_ms,
         }
 
@@ -79,6 +85,8 @@ class FailureSimulator:
             self.force_health_unhealthy = False
         elif flag == "simulate_storage_error":
             self.simulate_storage_error = False
+        elif flag == "crash_on_disconnect":
+            self.crash_on_disconnect = False
         elif flag == "delay_ms":
             self.delay_ms = 0
         else:
@@ -222,12 +230,23 @@ class ConnectionManager:
                     del self.active_connections[transfer_id]
                     self.unacked_streak.pop(transfer_id, None)
 
-                logger.info(
-                    "WebSocket disconnected: transfer=%s, role=%s, remaining_peers=%d",
-                    transfer_id,
-                    role,
-                    peer_count,
-                )
+                record = get_transfer(transfer_id)
+                if record and record.get("status") != "completed":
+                    logger.error(
+                        "Peer connection severed mid-transfer: transfer=%s, role=%s, remaining_peers=%d (Incomplete transfer: %d/%d chunks)",
+                        transfer_id,
+                        role,
+                        peer_count,
+                        record.get("received_chunks_count", 0),
+                        record.get("total_chunks", 0),
+                    )
+                else:
+                    logger.info(
+                        "WebSocket disconnected: transfer=%s, role=%s, remaining_peers=%d",
+                        transfer_id,
+                        role,
+                        peer_count,
+                    )
 
                 # Broadcast disconnect notification
                 asyncio.create_task(

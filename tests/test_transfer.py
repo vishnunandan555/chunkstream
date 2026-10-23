@@ -374,3 +374,39 @@ def test_websocket_resume_flow():
     dl_res = client.get(f"/api/transfers/{transfer_id}/download")
     assert dl_res.status_code == 200
     assert dl_res.content == full_payload
+
+
+def test_sender_abrupt_disconnect_raises_connection_reset_error():
+    transfer_id = "TEST-ABRUPT-DISCONNECT"
+    create_transfer(
+        transfer_id=transfer_id,
+        filename="abrupt.txt",
+        filesize=1000,
+        chunk_size=100,
+        total_chunks=10,
+    )
+
+    # Simulates browser refresh mid-transfer (code=1001 Going Away)
+    with pytest.raises(ConnectionResetError) as exc_info:
+        with client.websocket_connect(f"/ws/transfer/{transfer_id}?role=sender") as ws:
+            _ = ws.receive_json()
+            ws.close(code=1001)
+
+    assert "ClientAbruptDisconnectError" in str(exc_info.value)
+    assert "Sender abruptly disconnected / refreshed" in str(exc_info.value)
+
+    # Check that transfer was marked interrupted
+    t = get_transfer(transfer_id)
+    assert t["status"] == "interrupted"
+
+
+def test_crash_endpoints_with_confirm_flag():
+    # Calling crash endpoint with confirm=true bypasses 403
+    res = client.post("/api/test/crash?confirm=true")
+    assert res.status_code == 200
+    assert res.json()["status"] == "crashing"
+
+    res_dl = client.get("/api/test/crash/deadlock?confirm=true")
+    assert res_dl.status_code == 200
+    assert res_dl.json()["status"] == "deadlocked"
+

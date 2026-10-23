@@ -166,23 +166,26 @@ def verify_crash_allowed(
     request: Request,
     x_admin_key: Optional[str] = Header(None, alias="X-Admin-Key"),
     admin_key: Optional[str] = Query(None),
+    confirm: Optional[str] = Query(None),
+    force: Optional[str] = Query(None),
 ):
     """
     Guards destructive crash simulation endpoints (F2, OOM, Deadlock):
-    Requires explicit ALLOW_SIM_CRASH=true or valid ADMIN_API_KEY.
+    Allows execution if ?confirm=true, ?force=true, ALLOW_SIM_CRASH=true, or valid ADMIN_API_KEY.
     """
     configured_key = os.environ.get("ADMIN_API_KEY")
     provided_key = x_admin_key or admin_key
     allow_crash = os.environ.get("ALLOW_SIM_CRASH", "").lower() in ("1", "true", "yes")
+    is_confirmed = (confirm or "").lower() in ("1", "true", "yes") or (force or "").lower() in ("1", "true", "yes")
 
     if configured_key and provided_key and secrets.compare_digest(provided_key, configured_key):
-        return
-    if allow_crash:
-        return
+        return True
+    if allow_crash or is_confirmed:
+        return True
 
     raise HTTPException(
         status_code=status.HTTP_403_FORBIDDEN,
-        detail="Forbidden: Destructive crash endpoint disabled. Set ALLOW_SIM_CRASH=true or provide valid X-Admin-Key",
+        detail="Forbidden: Destructive crash endpoint disabled. Pass ?confirm=true, set ALLOW_SIM_CRASH=true, or provide valid X-Admin-Key",
     )
 
 
@@ -517,14 +520,15 @@ async def trigger_receiver_disconnect(transfer_id: str = Query(...)):
     return {"transfer_id": transfer_id, "disconnected_receivers": count}
 
 
-@app.post("/api/test/crash", tags=["Simulation"], dependencies=[Depends(verify_crash_allowed)])
+@app.api_route("/api/test/crash", methods=["GET", "POST"], tags=["Simulation"], dependencies=[Depends(verify_crash_allowed)])
 async def crash_server():
     """
     F2: Intentional Server Crash.
-    Emits critical log and terminates process after a brief delay so HTTP response flushes.
+    Emits critical log with traceback and terminates process after a brief delay so HTTP response flushes.
     """
     logger.critical(
-        "[FATAL CRASH TRIGGERED - F2] Simulated SIGSEGV / unhandled fatal exception in transfer engine"
+        "[FATAL CRASH TRIGGERED - F2] Simulated SIGSEGV / unhandled fatal exception in transfer engine",
+        exc_info=True,
     )
 
     def _delayed_exit():
@@ -535,7 +539,14 @@ async def crash_server():
     return {"status": "crashing", "message": "Server exiting immediately with exit code 1 (F2)"}
 
 
-@app.post("/api/test/crash/deadlock", tags=["Simulation"], dependencies=[Depends(verify_crash_allowed)])
+@app.api_route("/api/test/crash/immediate", methods=["GET", "POST"], tags=["Simulation"], dependencies=[Depends(verify_crash_allowed)])
+async def crash_server_immediate():
+    """Immediately terminates the process with exit code 1."""
+    logger.critical("FATAL: Immediate server crash requested via /api/test/crash/immediate")
+    os._exit(1)
+
+
+@app.api_route("/api/test/crash/deadlock", methods=["GET", "POST"], tags=["Simulation"], dependencies=[Depends(verify_crash_allowed)])
 async def trigger_deadlock():
     """
     Simulates a thread deadlock between worker threads.
@@ -578,7 +589,7 @@ async def trigger_deadlock():
     }
 
 
-@app.post("/api/test/crash/oom", tags=["Simulation"], dependencies=[Depends(verify_crash_allowed)])
+@app.api_route("/api/test/crash/oom", methods=["GET", "POST"], tags=["Simulation"], dependencies=[Depends(verify_crash_allowed)])
 async def trigger_oom():
     """
     Simulates Out-Of-Memory (OOM) by rapidly allocating heap memory in a background thread,
@@ -600,42 +611,29 @@ async def trigger_oom():
     return {"status": "oom_initiated", "message": "Rapid memory allocation started; container will crash shortly"}
 
 
-@app.post("/api/test/error", tags=["Simulation"], dependencies=[Depends(verify_admin_or_sim_allowed)])
+@app.api_route("/api/test/error", methods=["GET", "POST"], tags=["Simulation"], dependencies=[Depends(verify_admin_or_sim_allowed)])
 async def trigger_runtime_error(error_type: str = Query("key_error", alias="type")):
     """
-    Triggers realistic program errors/exceptions that log full tracebacks to stdout/Render/ProdPilot
-    while the server remains running.
+    Triggers realistic unhandled program errors/exceptions that log full tracebacks to stdout/Render/ProdPilot
+    while the server remains running. Let errors flow unhandled!
     """
-    try:
-        if error_type == "key_error":
-            data = {"transfer_id": "9999"}
-            _ = data["non_existent_chunk_hash_table"]
-        elif error_type == "type_error":
-            offset = None
-            _ = offset + 262144
-        elif error_type == "db_lock":
-            import sqlite3
-            raise sqlite3.OperationalError("database is locked (Simulated concurrent lock contention on chunks.db)")
-        elif error_type == "ack_timeout":
-            raise TimeoutError("ReceiverAckTimeoutError: Transfer 9999 halted: 10 consecutive chunks sent without ACK from receiver")
-        elif error_type == "storage_full":
-            raise OSError(28, "No space left on device: '/data/downloads/9999/chunk_0042.part'")
-        elif error_type == "broken_pipe":
-            raise BrokenPipeError("ReceiverMissingError: Cannot relay chunk 42 for transfer 9999 - receiver connection broken")
-        else:
-            raise ValueError(f"Unknown simulated error type '{error_type}'")
-    except Exception as exc:
-        logger.exception("Simulated runtime program error (%s): %s", error_type, exc)
-        return JSONResponse(
-            status_code=500,
-            content={
-                "status": "error_logged",
-                "error_type": error_type,
-                "exception": type(exc).__name__,
-                "message": str(exc),
-                "server_running": True,
-            },
-        )
+    if error_type == "key_error":
+        data = {"transfer_id": "9999"}
+        _ = data["non_existent_chunk_hash_table"]
+    elif error_type == "type_error":
+        offset = None
+        _ = offset + 262144
+    elif error_type == "db_lock":
+        import sqlite3
+        raise sqlite3.OperationalError("database is locked (Simulated concurrent lock contention on chunks.db)")
+    elif error_type == "ack_timeout":
+        raise TimeoutError("ReceiverAckTimeoutError: Transfer 9999 halted: 10 consecutive chunks sent without ACK from receiver")
+    elif error_type == "storage_full":
+        raise OSError(28, "No space left on device: '/data/downloads/9999/chunk_0042.part'")
+    elif error_type == "broken_pipe":
+        raise BrokenPipeError("ReceiverMissingError: Cannot relay chunk 42 for transfer 9999 - receiver connection broken")
+    else:
+        raise ValueError(f"Unknown simulated error type '{error_type}'")
 
 
 # --- WebSocket Endpoint ---
@@ -643,7 +641,10 @@ async def trigger_runtime_error(error_type: str = Query("key_error", alias="type
 
 @app.websocket("/ws/transfer/{transfer_id}")
 async def transfer_websocket(
-    websocket: WebSocket, transfer_id: str, role: str = Query("observer")
+    websocket: WebSocket,
+    transfer_id: str,
+    role: str = Query("observer"),
+    crash_on_disconnect: bool = Query(False),
 ):
     """
     Live WebSocket relay for sender and receiver.
@@ -654,8 +655,65 @@ async def transfer_websocket(
         while True:
             text = await websocket.receive_text()
             await handle_websocket_message(websocket, text)
-    except WebSocketDisconnect:
+    except WebSocketDisconnect as exc:
         manager.disconnect(websocket)
+        record = get_transfer(transfer_id)
+        is_transfer_incomplete = record and record.get("status") != "completed"
+        if role in ("sender", "receiver") and is_transfer_incomplete:
+            done_chunks = record.get("received_chunks_count", 0)
+            total_chunks = record.get("total_chunks", 0)
+            pct = record.get("progress_percentage", 0.0)
+            update_transfer_status(transfer_id, "interrupted")
+
+            if (
+                crash_on_disconnect
+                or simulator.crash_on_disconnect
+                or os.environ.get("CRASH_ON_DISCONNECT", "").lower() in ("1", "true", "yes")
+            ):
+                logger.critical(
+                    "FATAL CLIENT DISCONNECT [CRASH TRIGGERED]: %s disconnected at chunk %d/%d (%.1f%%) for transfer %s (code=%s) -> TERMINATING SERVER PROCESS",
+                    role.upper(),
+                    done_chunks,
+                    total_chunks,
+                    pct,
+                    transfer_id,
+                    exc.code,
+                    exc_info=True,
+                )
+                os._exit(1)
+
+            # Browser refresh sends code 1001 (Going Away); network drop sends code 1006 (Abnormal Closure)
+            if exc.code != 1000:
+                logger.critical(
+                    "ClientAbruptDisconnectError: %s unexpectedly disconnected / refreshed mid-transfer for %s at chunk %d/%d (%.1f%%, code=%s)",
+                    role.capitalize(),
+                    transfer_id,
+                    done_chunks,
+                    total_chunks,
+                    pct,
+                    exc.code,
+                    exc_info=True,
+                )
+                raise ConnectionResetError(
+                    f"ClientAbruptDisconnectError: {role.capitalize()} abruptly disconnected / refreshed mid-transfer for {transfer_id} "
+                    f"at chunk {done_chunks}/{total_chunks} ({pct}%, code={exc.code})"
+                ) from exc
+            else:
+                logger.warning(
+                    "Transfer %s interrupted: %s closed connection cleanly (code=1000) before completion (%d/%d chunks)",
+                    transfer_id,
+                    role.capitalize(),
+                    done_chunks,
+                    total_chunks,
+                )
+    except Exception as exc:
+        logger.exception(
+            "CRITICAL Unhandled Exception in WebSocket transfer=%s role=%s: %s",
+            transfer_id,
+            role,
+            exc,
+        )
+        raise
 
 
 # Mount static web interface files
