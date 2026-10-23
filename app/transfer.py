@@ -318,6 +318,15 @@ async def handle_websocket_message(websocket: WebSocket, raw_message: str) -> No
         # Broadcast progress update to all peers/observers
         transfer_info = get_transfer(transfer_id)
         if transfer_info:
+            pct = transfer_info["progress_percentage"]
+            logger.info(
+                "Transfer %s: Chunk %d/%d (%d KB) saved & relayed -> %.1f%%",
+                transfer_id,
+                chunk_index + 1,
+                transfer_info["total_chunks"],
+                len(chunk_bytes) // 1024,
+                pct,
+            )
             await manager.broadcast(
                 transfer_id,
                 {
@@ -325,7 +334,7 @@ async def handle_websocket_message(websocket: WebSocket, raw_message: str) -> No
                     "transfer_id": transfer_id,
                     "received": transfer_info["received_chunks_count"],
                     "total": transfer_info["total_chunks"],
-                    "percentage": transfer_info["progress_percentage"],
+                    "percentage": pct,
                     "status": transfer_info["status"],
                 },
             )

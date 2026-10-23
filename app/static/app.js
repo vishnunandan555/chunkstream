@@ -78,11 +78,11 @@ function generate4DigitCode() {
 }
 
 function arrayBufferToBase64(buffer) {
-  let binary = '';
   const bytes = new Uint8Array(buffer);
-  const len = bytes.byteLength;
-  for (let i = 0; i < len; i++) {
-    binary += String.fromCharCode(bytes[i]);
+  let binary = '';
+  const batchSize = 8192;
+  for (let i = 0; i < bytes.length; i += batchSize) {
+    binary += String.fromCharCode.apply(null, bytes.subarray(i, i + batchSize));
   }
   return window.btoa(binary);
 }
@@ -277,7 +277,15 @@ function connectSenderWebSocket() {
 }
 
 function startStreamingChunks(missing, peerName) {
-  if (isStreaming) return;
+  if (peerName) {
+    senderStatusSub.textContent = `Connected to ${peerName}`;
+  }
+  if (isStreaming) {
+    if (missing && missing.length > 0) {
+      streamFileChunks(missing);
+    }
+    return;
+  }
   isStreaming = true;
   senderStartTime = Date.now();
 
