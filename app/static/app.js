@@ -1,4 +1,35 @@
-// ChunkStream Minimal Frontend Logic with Speed & Peer Names
+// Theme Toggle Logic
+const themeToggle = document.getElementById('theme-toggle');
+const iconSun = document.querySelector('.icon-sun');
+const iconMoon = document.querySelector('.icon-moon');
+
+function applyTheme(theme) {
+  if (theme === 'light') {
+    document.documentElement.setAttribute('data-theme', 'light');
+    if (iconSun && iconMoon) {
+      iconSun.classList.remove('hidden');
+      iconMoon.classList.add('hidden');
+    }
+  } else {
+    document.documentElement.removeAttribute('data-theme');
+    if (iconSun && iconMoon) {
+      iconSun.classList.add('hidden');
+      iconMoon.classList.remove('hidden');
+    }
+  }
+}
+
+const savedTheme = localStorage.getItem('cs_theme') || (window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
+applyTheme(savedTheme);
+
+if (themeToggle) {
+  themeToggle.addEventListener('click', () => {
+    const isLight = document.documentElement.getAttribute('data-theme') === 'light';
+    const newTheme = isLight ? 'dark' : 'light';
+    localStorage.setItem('cs_theme', newTheme);
+    applyTheme(newTheme);
+  });
+}
 
 const ADJECTIVES = ['Brave', 'Swift', 'Cosmic', 'Silent', 'Neon', 'Solar', 'Lunar', 'Electric', 'Clever', 'Amber', 'Mystic', 'Frost', 'Bold', 'Agile', 'Shadow', 'Velvet'];
 const ANIMALS = ['Falcon', 'Otter', 'Lynx', 'Dolphin', 'Fox', 'Eagle', 'Hawk', 'Badger', 'Panda', 'Tiger', 'Wolf', 'Phoenix', 'Rabbit', 'Owl', 'Panther', 'Koala'];
