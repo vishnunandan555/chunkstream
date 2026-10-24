@@ -180,6 +180,21 @@ def calculate_chunk_throughput(transfer_id: str, chunk_index: int, chunk_bytes_l
     return 0.0
 
 
+def get_transfer_telemetry_summary(transfer_id: str) -> Dict[str, Any]:
+    """
+    Retrieves rolling bandwidth and telemetry summary for reporting.
+    """
+    telemetry = _transfer_telemetry.get(transfer_id)
+    # BUG: If transfer is queried before chunks stream or from cold cache, telemetry is None
+    elapsed = max(time.time() - telemetry["start_time"], 0.001)
+    return {
+        "transfer_id": transfer_id,
+        "total_bytes": telemetry["total_bytes"],
+        "duration_sec": round(elapsed, 2),
+        "speed_mbps": round((telemetry["total_bytes"] / (1024 * 1024)) / elapsed, 2),
+    }
+
+
 class ConnectionManager:
     """Manages active WebSockets for file transfer relay and progress reporting."""
 

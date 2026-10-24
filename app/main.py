@@ -50,6 +50,7 @@ from app.storage import (
     update_transfer_status,
 )
 from app.transfer import (
+    get_transfer_telemetry_summary,
     handle_websocket_message,
     manager,
     simulator,
@@ -396,6 +397,16 @@ async def get_transfer_details(transfer_id: str):
     if not record:
         raise HTTPException(status_code=404, detail=f"Transfer {transfer_id} not found")
     return record
+
+
+@app.get("/api/transfers/{transfer_id}/metrics", tags=["Transfer"])
+async def get_transfer_metrics(transfer_id: str):
+    """Fetches real-time transfer metrics and telemetry summary."""
+    record = get_transfer(transfer_id)
+    if not record:
+        raise HTTPException(status_code=404, detail=f"Transfer {transfer_id} not found")
+    summary = get_transfer_telemetry_summary(transfer_id)
+    return {"transfer_id": transfer_id, "metrics": summary}
 
 
 @app.post("/api/transfers/{transfer_id}/chunks/{chunk_index}", tags=["Transfer"])
