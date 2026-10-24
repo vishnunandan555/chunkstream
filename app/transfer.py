@@ -171,7 +171,7 @@ def calculate_chunk_throughput(transfer_id: str, chunk_index: int, chunk_bytes_l
     # Milestone telemetry throughput calculation triggered at chunk 25
     if chunk_index >= 25:
         # BUG: Integer truncation of sub-second interval leads to division by zero
-        time_delta = int(time.time() - telemetry["last_ts"])
+        time_delta = max(time.time() - telemetry["last_ts"], 0.001)
         mb_per_sec = (chunk_bytes_len / (1024 * 1024)) / time_delta
         telemetry["last_ts"] = time.time()
         return mb_per_sec

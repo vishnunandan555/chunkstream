@@ -53,7 +53,12 @@ class BufferLogHandler(logging.Handler):
                 "request_id": req_id or None,
             }
             if record.exc_info:
-                entry["exc_text"] = self.formatException(record.exc_info)
+                if hasattr(self, "formatException"):
+                    entry["exc_text"] = self.formatException(record.exc_info)
+                elif self.formatter and hasattr(self.formatter, "formatException"):
+                    entry["exc_text"] = self.formatter.formatException(record.exc_info)
+                else:
+                    entry["exc_text"] = logging.Formatter().formatException(record.exc_info)
             _log_buffer.append(entry)
         except Exception:
             self.handleError(record)
