@@ -31,10 +31,12 @@ from app.storage import (
     get_transfer,
     init_db,
     list_transfers,
+    perform_full_cleanup,
     sanitize_filename,
     update_transfer_status,
 )
 from app.transfer import (
+    clear_transfer_telemetry,
     get_transfer_telemetry_summary,
     handle_websocket_message,
     manager,
@@ -52,14 +54,14 @@ async def lifespan(app: FastAPI):
     logger.info("Starting ChunkStream Zero-Storage Relay v%s (env: %s)", APP_VERSION, ENVIRONMENT)
     init_db()
 
-    # Background worker: clean up expired metadata records older than 1 hour
+    # Periodic maintenance worker: clean up expired metadata records older than 15 mins & checkpoint DB
     stop_event = asyncio.Event()
 
     async def _cleanup_worker():
         while not stop_event.is_set():
             try:
-                await asyncio.sleep(1800)
-                await asyncio.to_thread(cleanup_expired_transfers, 1)
+                await asyncio.sleep(300)
+                await asyncio.to_thread(perform_full_cleanup, 15)
             except asyncio.CancelledError:
                 break
             except Exception as exc:
@@ -283,10 +285,30 @@ async def get_transfer_metrics(transfer_id: str):
 
 @app.delete("/api/transfers/{transfer_id}", tags=["Transfer"])
 async def remove_transfer(transfer_id: str):
-    """Deletes transfer session metadata idempotently."""
+    """Deletes transfer session metadata and clears server cache idempotently."""
     delete_transfer(transfer_id)
-    logger.info("[%s] Transfer session metadata removed", transfer_id)
+    clear_transfer_telemetry(transfer_id)
+    logger.info("[%s] Transfer session metadata and telemetry cleared", transfer_id)
     return {"status": "deleted", "transfer_id": transfer_id}
+
+
+@app.post("/api/cleanup", tags=["Maintenance"])
+async def trigger_cleanup():
+    """Triggers server session cache prune and SQLite WAL checkpoint."""
+    result = await asyncio.to_thread(perform_full_cleanup, 15)
+    active_peers = manager.get_total_active_connections()
+    logger.info(
+        "Server maintenance cleanup executed: %d records purged, active peers: %d",
+        result.get("cleaned_transfers", 0),
+        active_peers,
+    )
+    return {
+        "status": "ok",
+        "cleaned_transfers": result.get("cleaned_transfers", 0),
+        "active_connections": active_peers,
+        "maintenance": result.get("maintenance"),
+        "message": "Server cache cleared and database checkpointed",
+    }
 
 
 # --- Real-Time Streaming WebSocket ---

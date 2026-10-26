@@ -157,13 +157,31 @@ def delete_transfer(transfer_id: str) -> bool:
     return deleted
 
 
-def cleanup_expired_transfers(max_age_hours: int = 1) -> int:
-    """Deletes stale/expired transfer metadata records (default: 1 hour retention)."""
-    cutoff = (datetime.now(timezone.utc) - timedelta(hours=max_age_hours)).isoformat()
+def cleanup_expired_transfers(
+    max_age_minutes: int = 15,
+    max_age_hours: Optional[int] = None,
+) -> int:
+    """Deletes stale/expired transfer metadata records (default: 15 minutes retention, 2 mins for completed/cancelled)."""
+    if max_age_hours is not None:
+        delta = timedelta(hours=max_age_hours)
+    else:
+        delta = timedelta(minutes=max_age_minutes)
+
+    cutoff = (datetime.now(timezone.utc) - delta).isoformat()
+    # Completed or cancelled transfers only need 2 minutes grace period
+    completed_cutoff = (datetime.now(timezone.utc) - timedelta(minutes=2)).isoformat()
+
     cleaned = 0
     with get_db_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute("SELECT id FROM transfers WHERE updated_at < ?", (cutoff,))
+        cursor.execute(
+            """
+            SELECT id FROM transfers
+            WHERE updated_at < ?
+               OR (status IN ('completed', 'cancelled') AND updated_at < ?)
+            """,
+            (cutoff, completed_cutoff),
+        )
         expired_ids = [r["id"] for r in cursor.fetchall()]
 
     for tid in expired_ids:
@@ -171,5 +189,34 @@ def cleanup_expired_transfers(max_age_hours: int = 1) -> int:
             cleaned += 1
 
     if cleaned > 0:
-        logger.info("Cleaned up %d expired transfer record(s) older than %d hour(s)", cleaned, max_age_hours)
+        logger.info("Cleaned up %d expired/finished transfer record(s) from server database", cleaned)
     return cleaned
+
+
+def prune_transfers_db() -> Dict[str, Any]:
+    """Truncates SQLite WAL log and optimizes query plans to reclaim memory and disk space."""
+    wal_status: List[Any] = []
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("PRAGMA wal_checkpoint(TRUNCATE);")
+            res = cursor.fetchone()
+            if res:
+                wal_status = list(res)
+            cursor.execute("PRAGMA optimize;")
+            conn.commit()
+    except Exception as exc:
+        logger.warning("Error during SQLite WAL checkpoint prune: %s", exc)
+
+    return {"wal_checkpoint": wal_status}
+
+
+def perform_full_cleanup(max_age_minutes: int = 15) -> Dict[str, Any]:
+    """Runs automated server cleanup: purges stale records and checkpoints the SQLite database."""
+    cleaned = cleanup_expired_transfers(max_age_minutes=max_age_minutes)
+    maintenance = prune_transfers_db()
+    return {
+        "cleaned_transfers": cleaned,
+        "maintenance": maintenance,
+    }
+

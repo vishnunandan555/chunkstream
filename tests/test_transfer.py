@@ -18,6 +18,8 @@ from app.storage import (
     delete_transfer,
     get_transfer,
     init_db,
+    perform_full_cleanup,
+    update_transfer_status,
 )
 
 
@@ -345,5 +347,75 @@ def test_webrtc_signaling_relay():
             cand_msg = rx_ws.receive_json()
             assert cand_msg["type"] == "signal_candidate"
             assert "192.168.1.100" in cand_msg["candidate"]["candidate"]
+
+
+def test_cleanup_api_and_storage_maintenance():
+    """Validates POST /api/cleanup endpoint and SQLite WAL truncate maintenance."""
+    create_transfer(
+        transfer_id="CLEANUP-01",
+        filename="dummy.txt",
+        filesize=100,
+        chunk_size=50,
+        total_chunks=2,
+    )
+    res = client.post("/api/cleanup")
+    assert res.status_code == 200
+    data = res.json()
+    assert data["status"] == "ok"
+    assert "cleaned_transfers" in data
+    assert "active_connections" in data
+    assert "maintenance" in data
+
+
+def test_auto_cleanup_completed_on_all_peers_disconnect():
+    """Validates that completed transfers are automatically purged when all peers disconnect."""
+    transfer_id = "AUTO-PURGE-01"
+    create_transfer(
+        transfer_id=transfer_id,
+        filename="finished_session.bin",
+        filesize=1000,
+        chunk_size=500,
+        total_chunks=2,
+    )
+
+    with client.websocket_connect(f"/ws/transfer/{transfer_id}?role=receiver") as rx_ws:
+        _ = rx_ws.receive_json()
+        with client.websocket_connect(f"/ws/transfer/{transfer_id}?role=sender") as sender_ws:
+            _ = sender_ws.receive_json()
+            _ = rx_ws.receive_json()
+
+            # Mark completed via WebSocket message
+            sender_ws.send_json({"type": "complete", "transfer_id": transfer_id})
+            assert sender_ws.receive_json()["type"] == "completed"
+            assert rx_ws.receive_json()["type"] == "completed"
+
+    # Both peers have now disconnected
+    # In SQLite, the session record is purged automatically
+    import time
+    for _ in range(20):
+        if get_transfer(transfer_id) is None:
+            break
+        time.sleep(0.05)
+    assert get_transfer(transfer_id) is None
+
+
+def test_perform_full_cleanup_expired_and_finished():
+    """Validates perform_full_cleanup removes records older than cutoff and finished sessions."""
+    transfer_id = "EXP-TEST-01"
+    create_transfer(
+        transfer_id=transfer_id,
+        filename="old_file.iso",
+        filesize=2000,
+        chunk_size=1000,
+        total_chunks=2,
+    )
+    # Mark as completed
+    update_transfer_status(transfer_id, "completed")
+
+    # perform_full_cleanup with 0 minutes threshold
+    result = perform_full_cleanup(max_age_minutes=0)
+    assert result["cleaned_transfers"] >= 1
+    assert get_transfer(transfer_id) is None
+
 
 

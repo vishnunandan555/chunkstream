@@ -728,10 +728,17 @@ function handleChunkAck(index) {
       clearInterval(pipelineWatchdog);
       pipelineWatchdog = null;
     }
+    // Notify server that transfer has fully completed to trigger server-side cleanup
+    if (senderWs && senderWs.readyState === WebSocket.OPEN) {
+      try {
+        senderWs.send(JSON.stringify({ type: 'complete', transfer_id: currentCode }));
+      } catch (_) {}
+    }
     senderStatusDot.className = 'status-dot green';
     senderStatusText.textContent = 'Transfer complete! Delivered to receiver.';
     senderActiveControls.classList.add('hidden');
     btnSendAgain.classList.remove('hidden');
+    addActivityLog('sender', 'Transfer complete • All chunks delivered • Server notified');
     return;
   }
 
@@ -997,7 +1004,22 @@ async function completeReceiverFile(filename, mimeType) {
     }
   }
 
+  // Notify server of completion
+  if (receiverWs && receiverWs.readyState === WebSocket.OPEN) {
+    try {
+      receiverWs.send(JSON.stringify({
+        type: 'complete',
+        transfer_id: rxTransferData ? rxTransferData.id : null,
+      }));
+    } catch (_) {}
+  }
+
   const blob = new Blob(sortedChunks, { type: mimeType || 'application/octet-stream' });
+  // Immediately clear chunk references to free client RAM
+  sortedChunks.length = 0;
+  rxChunksMap.clear();
+  rxReceivedIndices.clear();
+
   const url = URL.createObjectURL(blob);
   const tempLink = document.createElement('a');
   tempLink.href = url;
@@ -1008,11 +1030,14 @@ async function completeReceiverFile(filename, mimeType) {
 
   addActivityLog('rx', `File assembled • Download triggered directly to device`);
 
+  // Revoke object URL promptly to purge blob memory
   setTimeout(() => {
-    try { URL.revokeObjectURL(url); } catch (_) {}
-  }, 60000);
+    try {
+      URL.revokeObjectURL(url);
+      addActivityLog('rx', 'Memory cleared • Object URL cache purged');
+    } catch (_) {}
+  }, 8000);
 
-  rxChunksMap.clear();
   rxStatusFinished.textContent = 'File downloaded to your device.';
   rxClearedBox.classList.remove('hidden');
 }

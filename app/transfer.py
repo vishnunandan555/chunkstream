@@ -133,7 +133,32 @@ class ConnectionManager:
                 if peer_count == 0:
                     del self.active_connections[transfer_id]
                     clear_transfer_telemetry(transfer_id)
-                    logger.info("[%s] All peers disconnected. Session cleaned up.", transfer_id)
+                    logger.info("[%s] All peers disconnected. In-memory telemetry cleared.", transfer_id)
+
+                    # Auto-purge finished transfers from SQLite, or schedule cleanup for abandoned sessions
+                    record = get_transfer(transfer_id)
+                    status = record.get("status") if record else None
+                    if status in ("completed", "cancelled"):
+                        delete_transfer(transfer_id)
+                        logger.info("[%s] Finished transfer (%s) removed from server storage.", transfer_id, status)
+                    else:
+                        async def _delayed_abandonment_cleanup(tid: str, delay_sec: int = 300) -> None:
+                            try:
+                                await asyncio.sleep(delay_sec)
+                                if tid not in self.active_connections or len(self.active_connections[tid]) == 0:
+                                    if delete_transfer(tid):
+                                        clear_transfer_telemetry(tid)
+                                        logger.info(
+                                            "[%s] Abandoned session automatically purged from database (no reconnect in %ds).",
+                                            tid,
+                                            delay_sec,
+                                        )
+                            except asyncio.CancelledError:
+                                pass
+                            except Exception as exc:
+                                logger.warning("[%s] Error in delayed session cleanup: %s", tid, exc)
+
+                        asyncio.create_task(_delayed_abandonment_cleanup(transfer_id))
 
                 asyncio.create_task(
                     self.broadcast(
@@ -377,4 +402,18 @@ async def handle_websocket_message(websocket: WebSocket, raw_message: str) -> No
                 "transfer_id": transfer_id,
             },
         )
+
+        async def _delayed_completed_cleanup(tid: str, delay_sec: int = 60) -> None:
+            try:
+                await asyncio.sleep(delay_sec)
+                # Purge completed transfer record and telemetry after grace period
+                delete_transfer(tid)
+                clear_transfer_telemetry(tid)
+                logger.info("[%s] Completed transfer pruned from database after %ds grace period.", tid, delay_sec)
+            except asyncio.CancelledError:
+                pass
+            except Exception as exc:
+                logger.warning("[%s] Error in completed session cleanup: %s", tid, exc)
+
+        asyncio.create_task(_delayed_completed_cleanup(transfer_id))
         return
