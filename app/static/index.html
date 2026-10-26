@@ -12,7 +12,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;600;700&display=swap" rel="stylesheet">
   
   <!-- Cache-busting stylesheet -->
-  <link rel="stylesheet" href="style.css?v=5.3.0">
+  <link rel="stylesheet" href="style.css?v=5.4.0">
 
   <!-- Core Inlines to guarantee instant centered layout and zero FOUC -->
   <style>
@@ -219,6 +219,15 @@
               <button type="button" class="btn btn-danger" id="btn-cancel-send">Cancel</button>
             </div>
 
+            <!-- Live Activity Log -->
+            <div class="activity-log-box" id="sender-activity-box">
+              <div class="activity-log-header">
+                <span class="activity-indicator"></span>
+                <span>Transfer Activity</span>
+              </div>
+              <div class="activity-log-list" id="sender-activity-list"></div>
+            </div>
+
             <button type="button" class="btn btn-secondary hidden" id="btn-send-again">Send Another File</button>
             <button type="button" class="btn-link" id="btn-back-from-send">
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
@@ -303,6 +312,15 @@
               <button type="button" class="btn btn-danger" id="btn-cancel-receive">Cancel</button>
             </div>
 
+            <!-- Live Activity Log -->
+            <div class="activity-log-box" id="rx-activity-box">
+              <div class="activity-log-header">
+                <span class="activity-indicator"></span>
+                <span>Transfer Activity</span>
+              </div>
+              <div class="activity-log-list" id="rx-activity-list"></div>
+            </div>
+
             <!-- Finished Box -->
             <div id="rx-cleared-box" class="hidden">
               <div class="success-banner">
@@ -332,6 +350,6 @@
     </main>
   </div>
 
-  <script src="app.js?v=5.3.0"></script>
+  <script src="app.js?v=5.4.0"></script>
 </body>
 </html>

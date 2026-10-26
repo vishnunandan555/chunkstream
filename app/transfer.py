@@ -98,6 +98,15 @@ class ConnectionManager:
         self.active_connections[transfer_id].add(websocket)
         self.connection_meta[websocket] = {"transfer_id": transfer_id, "role": role}
 
+        client_host = getattr(websocket.client, "host", "unknown") if websocket.client else "unknown"
+        logger.info(
+            "[%s] Peer connected: role=%s from %s (total peers in session: %d)",
+            transfer_id,
+            role.upper(),
+            client_host,
+            len(self.active_connections[transfer_id]),
+        )
+
         await self.broadcast(
             transfer_id,
             {
@@ -115,9 +124,16 @@ class ConnectionManager:
             if transfer_id in self.active_connections:
                 self.active_connections[transfer_id].discard(websocket)
                 peer_count = len(self.active_connections[transfer_id])
+                logger.info(
+                    "[%s] Peer disconnected: role=%s (remaining peers in session: %d)",
+                    transfer_id,
+                    role.upper(),
+                    peer_count,
+                )
                 if peer_count == 0:
                     del self.active_connections[transfer_id]
                     clear_transfer_telemetry(transfer_id)
+                    logger.info("[%s] All peers disconnected. Session cleaned up.", transfer_id)
 
                 asyncio.create_task(
                     self.broadcast(
@@ -199,6 +215,15 @@ async def handle_websocket_message(websocket: WebSocket, raw_message: str) -> No
 
     # 2. Peer Device & Network Info Exchange
     if msg_type == "peer_info":
+        device_label = data.get("display_name") or f"{data.get('device_model') or data.get('device') or 'Device'} ({data.get('browser') or 'Browser'})"
+        logger.info(
+            "[%s] Peer Identified: %s (Role: %s, OS: %s, Browser: %s)",
+            transfer_id,
+            device_label,
+            role.upper(),
+            data.get("os", "unknown"),
+            data.get("browser", "unknown"),
+        )
         await manager.broadcast(
             transfer_id,
             {
@@ -228,6 +253,7 @@ async def handle_websocket_message(websocket: WebSocket, raw_message: str) -> No
 
     # 3. Pause Transfer
     if msg_type == "pause":
+        logger.info("[%s] Transfer paused by %s", transfer_id, role.upper())
         update_transfer_status(transfer_id, "paused")
         await manager.broadcast(
             transfer_id,
@@ -237,6 +263,7 @@ async def handle_websocket_message(websocket: WebSocket, raw_message: str) -> No
 
     # 4. Resume Transfer
     if msg_type == "resume":
+        logger.info("[%s] Transfer resumed by %s", transfer_id, role.upper())
         update_transfer_status(transfer_id, "transferring")
         await manager.broadcast(
             transfer_id,
@@ -246,6 +273,7 @@ async def handle_websocket_message(websocket: WebSocket, raw_message: str) -> No
 
     # 5. Cancel Transfer
     if msg_type == "cancel":
+        logger.info("[%s] Transfer cancelled by %s", transfer_id, role.upper())
         update_transfer_status(transfer_id, "cancelled")
         clear_transfer_telemetry(transfer_id)
         await manager.broadcast(
@@ -271,6 +299,7 @@ async def handle_websocket_message(websocket: WebSocket, raw_message: str) -> No
 
         # If receiver is not connected, notify sender and do not ACK
         if not manager.has_role(transfer_id, "receiver"):
+            logger.warning("[%s] Chunk %s dropped: receiver is NOT connected", transfer_id, chunk_index)
             await websocket.send_text(
                 json.dumps({
                     "type": "peer_disconnected",
@@ -281,6 +310,23 @@ async def handle_websocket_message(websocket: WebSocket, raw_message: str) -> No
             return
 
         record_chunk_throughput(transfer_id, chunk_size)
+
+        # Periodic log for Render live tail visibility
+        if total_chunks and (chunk_index == 0 or (chunk_index + 1) % 25 == 0 or (chunk_index + 1) == total_chunks):
+            telem = _transfer_telemetry.get(transfer_id, {})
+            total_b = telem.get("total_bytes", chunk_size)
+            elapsed = max(0.001, time.perf_counter() - telem.get("start_time", time.perf_counter()))
+            speed_mb = (total_b / elapsed) / (1024 * 1024)
+            pct = round(((chunk_index + 1) / total_chunks) * 100)
+            logger.info(
+                "[%s] Relaying chunk %d/%d (%d%%) - %d KB - Live Speed: %.1f MB/s",
+                transfer_id,
+                chunk_index + 1,
+                total_chunks,
+                pct,
+                round(chunk_size / 1024),
+                speed_mb,
+            )
 
         # ACK to sender immediately so flow control advances
         await websocket.send_text(
@@ -308,6 +354,7 @@ async def handle_websocket_message(websocket: WebSocket, raw_message: str) -> No
         update_transfer_status(transfer_id, "transferring")
         # Forward missing chunk request directly to sender
         missing_chunks = data.get("missing_chunks", [])
+        logger.info("[%s] Resume requested by receiver: %d missing chunks", transfer_id, len(missing_chunks))
         await manager.send_to_role(
             transfer_id,
             "sender",
@@ -321,6 +368,7 @@ async def handle_websocket_message(websocket: WebSocket, raw_message: str) -> No
 
     # 8. Transfer Completed
     elif msg_type == "complete":
+        logger.info("[%s] Transfer complete! All chunks relayed live to receiver.", transfer_id)
         update_transfer_status(transfer_id, "completed")
         await manager.broadcast(
             transfer_id,

@@ -173,9 +173,25 @@ const rxProgressChunks = document.getElementById('rx-progress-chunks');
 const rxActiveControls = document.getElementById('rx-active-controls');
 const btnCancelReceive = document.getElementById('btn-cancel-receive');
 const rxClearedBox = document.getElementById('rx-cleared-box');
-const rxStatusFinished = document.getElementById('rx-status-finished');
 const btnReceiveAgain = document.getElementById('btn-receive-again');
 const btnBackFromReceive = document.getElementById('btn-back-from-receive');
+const senderActivityList = document.getElementById('sender-activity-list');
+const rxActivityList = document.getElementById('rx-activity-list');
+
+function addActivityLog(role, message) {
+  const list = role === 'sender' ? senderActivityList : rxActivityList;
+  if (!list) return;
+  const now = new Date();
+  const timeStr = now.toTimeString().split(' ')[0];
+  const row = document.createElement('div');
+  row.className = 'log-item';
+  row.innerHTML = `<span class="log-time">${timeStr}</span><span class="log-text">${message}</span>`;
+  list.appendChild(row);
+  list.scrollTop = list.scrollHeight;
+  while (list.children.length > 30) {
+    list.removeChild(list.firstChild);
+  }
+}
 
 // Device Identification
 function getCookie(name) {
@@ -392,6 +408,11 @@ fileInput.addEventListener('change', (e) => {
   }
 });
 
+function escapeHtml(str) {
+  if (!str) return '';
+  return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
 async function handleFileSelected(file) {
   if (!file || file.size <= 0) {
     alert('Please select a valid non-empty file.');
@@ -424,12 +445,18 @@ async function handleFileSelected(file) {
   senderStepTransfer.classList.remove('hidden');
   senderStatusText.textContent = 'Waiting for receiver to connect...';
   senderStatusDot.className = 'status-dot';
-  senderProgressBox.classList.add('hidden');
+  senderProgressBox.classList.remove('hidden');
   senderActiveControls.classList.add('hidden');
   if (senderPeerPill) senderPeerPill.classList.add('hidden');
   btnSendAgain.classList.add('hidden');
   btnPauseSend.classList.remove('hidden');
   btnResumeSend.classList.add('hidden');
+
+  if (senderActivityList) senderActivityList.innerHTML = '';
+  addActivityLog('sender', `Selected "${escapeHtml(file.name)}" (${formatBytes(file.size)})`);
+  addActivityLog('sender', `Prepared ${totalChunks} chunks of 256 KB slices`);
+  addActivityLog('sender', `Transfer Code: <strong>${currentCode}</strong>`);
+  addActivityLog('sender', 'Waiting for receiver to connect...');
 
   try {
     const res = await fetch('/api/transfers', {
@@ -460,6 +487,7 @@ function connectSenderWebSocket() {
 
   senderWs.onopen = () => {
     sendPeerInfo('sender', senderWs);
+    addActivityLog('sender', 'Connected to relay server. Waiting for peer...');
   };
 
   senderWs.onmessage = async (e) => {
@@ -469,12 +497,15 @@ function connectSenderWebSocket() {
         sendPeerInfo('sender', senderWs);
         senderStatusDot.className = 'status-dot green';
         senderStatusText.textContent = 'Receiver connected. Starting stream...';
+        addActivityLog('sender', 'Receiver connected • Initiating live stream...');
         if (!isPaused && !isStreaming) {
           startStreamingChunks();
         }
       } else if (msg.type === 'peer_info') {
         if (msg.role === 'receiver' || msg.role === 'rx') {
           handlePeerInfo('sender', msg);
+          const devName = msg.display_name || `${msg.device_model || msg.device || 'Peer'} (${msg.browser || 'Browser'})`;
+          addActivityLog('sender', `Peer identified: <strong>${escapeHtml(devName)}</strong>`);
           if (!isPaused && !isStreaming && currentFile) {
             startStreamingChunks();
           }
@@ -490,11 +521,13 @@ function connectSenderWebSocket() {
           }
           senderStatusDot.className = 'status-dot';
           senderStatusText.textContent = 'Receiver disconnected. Transfer paused waiting for reconnect...';
+          addActivityLog('sender', 'Receiver disconnected. Transfer paused');
           btnPauseSend.classList.add('hidden');
           btnResumeSend.classList.remove('hidden');
           if (senderPeerPill) senderPeerPill.classList.add('hidden');
         }
       } else if (msg.type === 'request_missing') {
+        addActivityLog('sender', `Re-streaming ${msg.missing_chunks.length} missing chunks`);
         if (!isPaused) startStreamingChunks(msg.missing_chunks);
       } else if (msg.type === 'peer_paused' || msg.type === 'paused') {
         isPaused = true;
@@ -504,17 +537,20 @@ function connectSenderWebSocket() {
         }
         senderStatusDot.className = 'status-dot';
         senderStatusText.textContent = 'Transfer paused';
+        addActivityLog('sender', 'Transfer paused');
         btnPauseSend.classList.add('hidden');
         btnResumeSend.classList.remove('hidden');
       } else if (msg.type === 'peer_resumed' || msg.type === 'resumed') {
         isPaused = false;
         senderStatusDot.className = 'status-dot green';
         senderStatusText.textContent = 'Streaming directly to receiver...';
+        addActivityLog('sender', 'Transfer resumed');
         btnResumeSend.classList.add('hidden');
         btnPauseSend.classList.remove('hidden');
         startStreamingChunks();
       } else if (msg.type === 'transfer_cancelled' || msg.type === 'peer_cancelled') {
         if (msg.role !== 'sender') {
+          addActivityLog('sender', 'Transfer cancelled by receiver');
           alert('Transfer was cancelled by receiver.');
           resetSender();
         }
@@ -780,6 +816,7 @@ function resetSender() {
   senderStepTransfer.classList.add('hidden');
   senderActiveControls.classList.add('hidden');
   if (senderPeerPill) senderPeerPill.classList.add('hidden');
+  if (senderActivityList) senderActivityList.innerHTML = '';
   fileInput.value = '';
 }
 
@@ -803,6 +840,9 @@ async function startReceiving() {
     return;
   }
 
+  if (rxActivityList) rxActivityList.innerHTML = '';
+  addActivityLog('rx', `Connecting with code <strong>${escapeHtml(code)}</strong>...`);
+
   // Pre-fetch metadata
   try {
     const res = await fetch(`/api/transfers/${code}`);
@@ -812,6 +852,7 @@ async function startReceiving() {
       rxFileSize.textContent = formatBytes(rxTransferData.filesize);
       rxProgressBytes.textContent = `0 B / ${formatBytes(rxTransferData.filesize)}`;
       rxProgressChunks.textContent = `Chunk 0/${rxTransferData.total_chunks}`;
+      addActivityLog('rx', `File: <strong>${escapeHtml(rxTransferData.filename)}</strong> (${formatBytes(rxTransferData.filesize)}, ${rxTransferData.total_chunks} chunks)`);
     }
   } catch (_) {}
 
@@ -832,6 +873,7 @@ function connectReceiverWebSocket(code) {
 
   receiverWs.onopen = () => {
     sendPeerInfo('rx', receiverWs);
+    addActivityLog('rx', 'Connected to relay server. Waiting for sender...');
   };
 
   receiverWs.onmessage = async (e) => {
@@ -839,9 +881,12 @@ function connectReceiverWebSocket(code) {
       const msg = JSON.parse(e.data);
       if (msg.type === 'peer_connected' && msg.role === 'sender') {
         sendPeerInfo('rx', receiverWs);
+        addActivityLog('rx', 'Sender connected • Ready to stream chunks');
       } else if (msg.type === 'peer_info') {
         if (msg.role === 'sender') {
           handlePeerInfo('rx', msg);
+          const devName = msg.display_name || `${msg.device_model || msg.device || 'Peer'} (${msg.browser || 'Browser'})`;
+          addActivityLog('rx', `Peer identified: <strong>${escapeHtml(devName)}</strong>`);
         }
       } else if (msg.type === 'chunk' || msg.type === 'chunk_data') {
         await handleReceiverChunk(msg);
@@ -849,16 +894,20 @@ function connectReceiverWebSocket(code) {
         if (msg.role === 'sender') {
           rxStatusDot.className = 'status-dot';
           rxStatusText.textContent = 'Sender disconnected. Waiting to reconnect...';
+          addActivityLog('rx', 'Sender disconnected. Waiting to reconnect...');
           if (rxPeerPill) rxPeerPill.classList.add('hidden');
         }
       } else if (msg.type === 'peer_paused') {
         rxStatusDot.className = 'status-dot';
         rxStatusText.textContent = 'Transfer paused by sender';
+        addActivityLog('rx', 'Transfer paused by sender');
       } else if (msg.type === 'peer_resumed') {
         rxStatusDot.className = 'status-dot green';
         rxStatusText.textContent = 'Receiving stream from sender...';
+        addActivityLog('rx', 'Transfer resumed by sender');
       } else if (msg.type === 'transfer_cancelled' || msg.type === 'peer_cancelled') {
         if (msg.role !== 'receiver') {
+          addActivityLog('rx', 'Transfer cancelled by sender');
           alert('Transfer was cancelled by sender.');
           resetReceiver();
         }
@@ -920,6 +969,13 @@ async function handleReceiverChunk(msg) {
 
   rxProgressBytes.textContent = `${formatBytes(rxBytesReceived)} / ${formatBytes(totalExpected)}`;
   rxProgressChunks.textContent = `Chunk ${rxReceivedIndices.size}/${total}`;
+  rxStatusText.textContent = `Receiving chunk ${rxReceivedIndices.size} of ${total} (${pct}% in memory)`;
+
+  if (rxReceivedIndices.size === 1) {
+    addActivityLog('rx', 'Receiving chunk stream directly into memory...');
+  } else if ((rxReceivedIndices.size % 25 === 0) || (rxReceivedIndices.size === total)) {
+    addActivityLog('rx', `Buffered chunk ${rxReceivedIndices.size}/${total} (${pct}%) • ${rxSpeed.textContent}`);
+  }
 
   if (rxReceivedIndices.size === total) {
     completeReceiverFile(rxTransferData ? rxTransferData.filename : 'downloaded_file', rxTransferData ? rxTransferData.mime_type : null);
@@ -930,6 +986,7 @@ async function completeReceiverFile(filename, mimeType) {
   rxStatusDot.className = 'status-dot green';
   rxStatusText.textContent = 'Download complete!';
   rxActiveControls.classList.add('hidden');
+  addActivityLog('rx', `All chunks buffered! Assembling file in memory...`);
 
   // Assemble file sequentially from received chunks and trigger standard browser download
   const totalExpectedChunks = rxTransferData ? rxTransferData.total_chunks : rxReceivedIndices.size;
@@ -948,6 +1005,8 @@ async function completeReceiverFile(filename, mimeType) {
   document.body.appendChild(tempLink);
   tempLink.click();
   document.body.removeChild(tempLink);
+
+  addActivityLog('rx', `File assembled • Download triggered directly to device`);
 
   setTimeout(() => {
     try { URL.revokeObjectURL(url); } catch (_) {}
@@ -995,6 +1054,7 @@ function resetReceiver() {
   rxProgressBox.classList.remove('hidden');
   rxActiveControls.classList.remove('hidden');
   if (rxPeerPill) rxPeerPill.classList.add('hidden');
+  if (rxActivityList) rxActivityList.innerHTML = '';
 }
 
 // Initial UI Setup

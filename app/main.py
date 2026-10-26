@@ -240,7 +240,7 @@ async def init_transfer(payload: CreateTransferRequest):
     if existing:
         return existing
 
-    return create_transfer(
+    record = create_transfer(
         transfer_id=transfer_id,
         filename=payload.filename,
         filesize=payload.filesize,
@@ -249,6 +249,15 @@ async def init_transfer(payload: CreateTransferRequest):
         mime_type=payload.mime_type,
         checksum=payload.checksum,
     )
+    logger.info(
+        "[%s] Registered transfer session: \"%s\" (%d bytes, %d chunks @ %d bytes/chunk)",
+        transfer_id,
+        payload.filename,
+        payload.filesize,
+        payload.total_chunks,
+        payload.chunk_size,
+    )
+    return record
 
 
 @app.get("/api/transfers", tags=["Transfer"])
@@ -274,10 +283,9 @@ async def get_transfer_metrics(transfer_id: str):
 
 @app.delete("/api/transfers/{transfer_id}", tags=["Transfer"])
 async def remove_transfer(transfer_id: str):
-    """Deletes transfer session metadata."""
-    deleted = delete_transfer(transfer_id)
-    if not deleted:
-        raise HTTPException(status_code=404, detail=f"Transfer {transfer_id} not found")
+    """Deletes transfer session metadata idempotently."""
+    delete_transfer(transfer_id)
+    logger.info("[%s] Transfer session metadata removed", transfer_id)
     return {"status": "deleted", "transfer_id": transfer_id}
 
 
@@ -291,18 +299,21 @@ async def transfer_websocket(
     role: str = Query("observer"),
 ):
     """Zero-server-storage real-time streaming WebSocket relay."""
+    client_ip = getattr(websocket.client, "host", "unknown") if websocket.client else "unknown"
+    logger.info("[%s] WebSocket incoming: role=%s from %s", transfer_id, role.upper(), client_ip)
     await manager.connect(websocket, transfer_id, role)
     try:
         while True:
             text = await websocket.receive_text()
             await handle_websocket_message(websocket, text)
     except WebSocketDisconnect:
+        logger.info("[%s] WebSocket disconnect: role=%s from %s", transfer_id, role.upper(), client_ip)
         manager.disconnect(websocket)
         record = get_transfer(transfer_id)
         if record and record.get("status") not in ("completed", "paused", "cancelled"):
             update_transfer_status(transfer_id, "interrupted")
     except Exception as exc:
-        logger.error("WebSocket error for transfer=%s role=%s: %s", transfer_id, role, exc)
+        logger.error("[%s] WebSocket error for role=%s: %s", transfer_id, role.upper(), exc)
         manager.disconnect(websocket)
 
 
