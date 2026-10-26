@@ -1,23 +1,26 @@
 # ChunkStream
 
-**Fast, minimal, resumable peer-to-peer file transfers.**
+**Ultra-fast, zero-server-storage peer file streaming relay.**
 
-ChunkStream is an ultra-lightweight, resilient file transfer service built with FastAPI, WebSockets, and SQLite. It slices files into chunks, streams them across peers in real time, and automatically reassembles and verifies the final file with SHA-256 checksums.
+ChunkStream is an ultra-lightweight, resilient file streaming relay built with FastAPI, WebSockets, WebRTC, and SQLite. Files are sliced on the sender's device, relayed directly peer-to-peer or through an in-memory WebSocket pipeline in real time, and assembled straight into receiver memory without writing a single byte of file data to the server disk.
 
-Optimized specifically for free-tier hosting (Render, Railway, Fly.io, etc.) with minimal memory (<256MB RAM), automatic disk space reclamation, and zero external database dependencies.
+Optimized specifically for free-tier hosting (Render, Railway, Fly.io, etc.) with minimal memory footprint (<64MB RAM), zero disk usage, automatic memory purging, and seamless dark and light modes.
 
 ---
 
 ## Highlights
 
-- **Direct Chunked Streaming**: Files are sliced into 256 KB chunks and streamed over low-latency WebSockets.
-- **Resumable Transfers**: If a sender or receiver disconnects, simply reconnect with the 4-digit code. ChunkStream synchronizes missing chunks and resumes right where it left off.
-- **SHA-256 Integrity Verification**: Individual chunks and final assembled files are verified against SHA-256 hashes.
-- **Hyper-Optimized for Free Hosting**:
-  - Automatically deletes intermediate `.part` chunk files upon reassembly (halving disk usage).
-  - Background worker purges expired transfers after 1 hour.
-  - Zero heavy database or caching dependencies; uses SQLite in WAL mode.
-- **Flat, Minimal UI**: Clean, responsive, high-contrast flat design with real-time transfer stats (MB/s, ETA, chunks, bytes).
+- **Zero Server Storage (0 Bytes on Disk)**: Chunks stream directly from sender to receiver in real time. The server never writes chunk files or assembled downloads to disk, allowing transfers of virtually any size (100MB, 500MB, 5GB+) on free hosting tiers with tiny disk limits.
+- **Dynamic LAN & Internet Relay**:
+  - **Direct LAN Mode**: Uses WebSockets for zero-configuration WebRTC signaling and transfers files directly peer-to-peer over local Wi-Fi / LAN when available.
+  - **Cloud In-Memory Relay**: Seamlessly relays chunks in real time over secure WebSockets when peers are on different networks.
+- **Resilient Flow-Controlled Pipeline**: A dynamic in-flight window with high-precision timestamp tracking and a 2.5-second watchdog prevents packet loss or pipeline stalls.
+- **Automatic Server & Client Cleanup**:
+  - **Immediate Session Purge**: Once all peers disconnect from a completed or cancelled transfer, metadata and in-memory telemetry are immediately removed from SQLite and RAM.
+  - **SQLite WAL Maintenance**: Periodic truncate checkpoints (`PRAGMA wal_checkpoint(TRUNCATE)`) keep the database footprint virtually at zero bytes.
+  - **Client RAM Purging**: Receiver chunks are cleared from browser memory immediately upon Blob creation, and Object URLs are revoked within 8 seconds to prevent browser memory bloat.
+- **Live Monospace Activity Feed**: Real-time event log in both sender and receiver interfaces tracking peer discovery, slicing progress, relay speed, and completion milestones.
+- **Refined Minimalist UI**: Calm, monochromatic interface with smooth light/dark mode toggling, zero external CSS frameworks, zero emojis, and pure SVG iconography.
 
 ---
 
@@ -25,11 +28,12 @@ Optimized specifically for free-tier hosting (Render, Railway, Fly.io, etc.) wit
 
 | Component | Technology | Description |
 |---|---|---|
-| **Backend** | Python 3 + FastAPI | Fast asynchronous REST API |
-| **Real-time Relay** | WebSockets | Real-time chunk streaming & peer progress sync |
-| **Storage & State** | SQLite (WAL mode) | Persistent transfer tracking & missing chunk indexing |
-| **Frontend** | Vanilla HTML5 / Flat CSS / JS | Zero-build minimal web UI with system typography |
-| **Observability** | Prometheus (`/metrics`) | Request counts, active WebSocket gauges, and chunks |
+| **Backend** | Python 3.10+ / FastAPI / Uvicorn | Asynchronous, non-blocking real-time streaming relay |
+| **Direct LAN Streaming** | WebRTC DataChannels | Peer-to-peer local streaming with zero server bandwidth |
+| **Cloud Relay** | Pure WebSockets | Zero-server-disk streaming relay with bidirectional flow control |
+| **Session Metadata** | SQLite (WAL mode) | Ephemeral session state, auto-purged on disconnect / completion |
+| **Frontend** | Vanilla HTML5 / Modern CSS / ES6 | Fast, buildless UI with dynamic dark/light theme and live telemetry |
+| **Observability** | Prometheus (`/metrics`) | Real-time request metrics, latency tracking, and throughput counters |
 
 ---
 
@@ -59,14 +63,13 @@ Open **`http://localhost:8000`** in your browser.
 
 ### Render
 1. Connect your repository to [Render](https://render.com).
-2. Use the included `render.yaml` blueprint or choose **Web Service**:
-   - **Environment**: Python
+2. Choose **Web Service** with Python environment:
    - **Build Command**: `pip install -r requirements.txt`
    - **Start Command**: `uvicorn app.main:app --host 0.0.0.0 --port $PORT --workers 1 --timeout-keep-alive 65`
    - **Health Check Path**: `/api/health`
 
 ### Railway / Fly.io / Heroku
-ChunkStream includes a standard `Procfile` ready for one-click deployment on any container/PaaS provider.
+ChunkStream includes a standard `Procfile` ready for one-click deployment on any PaaS or container provider.
 
 ---
 
@@ -74,17 +77,17 @@ ChunkStream includes a standard `Procfile` ready for one-click deployment on any
 
 | Method | Endpoint | Description |
 |---|---|---|
-| `GET` | `/api/health` | Service liveness & storage health check |
+| `GET` | `/api/health` | Service liveness, uptime, and database connectivity check |
+| `GET` | `/api/version` | Active version and zero-server-storage capability status |
+| `GET` | `/api/network-info` | Client network locality, masked IP, and server region |
 | `GET` | `/metrics` | Prometheus metrics exposition |
-| `GET` | `/api/version` | Version and uptime |
-| `POST` | `/api/transfers` | Initialize transfer session and metadata |
-| `GET` | `/api/transfers` | List recent transfers |
-| `GET` | `/api/transfers/{id}` | Inspect transfer progress and missing chunk indices |
-| `POST` | `/api/transfers/{id}/chunks/{index}` | Upload chunk via HTTP fallback |
-| `POST` | `/api/transfers/{id}/assemble` | Trigger file reassembly |
-| `GET` | `/api/transfers/{id}/download` | Download assembled file |
-| `DELETE` | `/api/transfers/{id}` | Delete transfer and immediately reclaim disk space |
-| `WS` | `/ws/transfer/{id}?role=sender\|receiver` | Bidirectional real-time streaming WebSocket |
+| `POST` | `/api/transfers` | Initialize transfer session metadata with 4-digit code |
+| `GET` | `/api/transfers` | List active transfer sessions |
+| `GET` | `/api/transfers/{id}` | Retrieve transfer session status and metadata |
+| `GET` | `/api/transfers/{id}/metrics` | Live bandwidth, duration, and transfer throughput stats |
+| `DELETE` | `/api/transfers/{id}` | Idempotently cancel transfer, free telemetry, and purge metadata |
+| `POST` | `/api/cleanup` | Maintenance endpoint to truncate SQLite WAL and prune stale sessions |
+| `WS` | `/ws/transfer/{id}?role=sender|receiver` | Real-time bidirectional WebSocket relay & WebRTC signaling |
 
 ---
 
