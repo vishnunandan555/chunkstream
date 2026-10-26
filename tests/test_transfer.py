@@ -267,3 +267,73 @@ def test_websocket_transfer_and_resume():
     dl_res = client.get(f"/api/transfers/{transfer_id}/download")
     assert dl_res.status_code == 200
     assert dl_res.content == full_payload
+
+
+def test_pause_and_resume_websocket():
+    transfer_id = "PROD-PAUSE-RESUME"
+    create_transfer(
+        transfer_id=transfer_id,
+        filename="pause_test.txt",
+        filesize=20,
+        chunk_size=10,
+        total_chunks=2,
+    )
+
+    with client.websocket_connect(f"/ws/transfer/{transfer_id}?role=receiver") as rx_ws:
+        _ = rx_ws.receive_json()
+
+        with client.websocket_connect(f"/ws/transfer/{transfer_id}?role=sender") as sender_ws:
+            _ = sender_ws.receive_json()
+            _ = rx_ws.receive_json()
+
+            # Sender pauses transfer
+            sender_ws.send_json({"type": "pause"})
+            # Both sender and receiver receive peer_paused
+            pause_on_sender = sender_ws.receive_json()
+            assert pause_on_sender["type"] == "peer_paused"
+            pause_on_rx = rx_ws.receive_json()
+            assert pause_on_rx["type"] == "peer_paused"
+
+            # Check DB status is paused
+            t = get_transfer(transfer_id)
+            assert t["status"] == "paused"
+
+            # Sender resumes transfer
+            sender_ws.send_json({"type": "resume"})
+            resume_on_sender = sender_ws.receive_json()
+            assert resume_on_sender["type"] == "peer_resumed"
+            resume_on_rx = rx_ws.receive_json()
+            assert resume_on_rx["type"] == "peer_resumed"
+
+            # Check DB status is transferring
+            t = get_transfer(transfer_id)
+            assert t["status"] == "transferring"
+
+
+def test_cancel_transfer_websocket():
+    transfer_id = "PROD-CANCEL-TEST"
+    create_transfer(
+        transfer_id=transfer_id,
+        filename="cancel_test.txt",
+        filesize=10,
+        chunk_size=5,
+        total_chunks=2,
+    )
+
+    with client.websocket_connect(f"/ws/transfer/{transfer_id}?role=receiver") as rx_ws:
+        _ = rx_ws.receive_json()
+
+        with client.websocket_connect(f"/ws/transfer/{transfer_id}?role=sender") as sender_ws:
+            _ = sender_ws.receive_json()
+            _ = rx_ws.receive_json()
+
+            # Sender cancels transfer
+            sender_ws.send_json({"type": "cancel"})
+            cancel_on_sender = sender_ws.receive_json()
+            assert cancel_on_sender["type"] == "peer_cancelled"
+            cancel_on_rx = rx_ws.receive_json()
+            assert cancel_on_rx["type"] == "peer_cancelled"
+
+            # DB record and storage should be deleted
+            assert get_transfer(transfer_id) is None
+

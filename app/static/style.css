@@ -441,6 +441,34 @@ body {
   background: var(--btn-secondary-hover);
 }
 
+.btn-group {
+  display: flex;
+  gap: 10px;
+  width: 100%;
+}
+
+.btn-group .btn {
+  flex: 1;
+}
+
+.btn-warning {
+  background: #d97706;
+  color: #ffffff;
+}
+
+.btn-warning:hover {
+  background: #b45309;
+}
+
+.btn-danger {
+  background: #dc2626;
+  color: #ffffff;
+}
+
+.btn-danger:hover {
+  background: #b91c1c;
+}
+
 .btn-large {
   padding: 14px 20px;
   font-size: 1rem;
