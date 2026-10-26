@@ -1,7 +1,21 @@
-// Theme Management
+// Theme Management with Safe Storage Fallback
 const themeToggle = document.getElementById('theme-toggle');
 const iconSun = document.querySelector('.icon-sun');
 const iconMoon = document.querySelector('.icon-moon');
+
+function safeGetStorage(key, fallback = null) {
+  try {
+    return localStorage.getItem(key) || fallback;
+  } catch (_) {
+    return fallback;
+  }
+}
+
+function safeSetStorage(key, val) {
+  try {
+    localStorage.setItem(key, val);
+  } catch (_) {}
+}
 
 function applyTheme(theme) {
   if (theme === 'light') {
@@ -19,14 +33,14 @@ function applyTheme(theme) {
   }
 }
 
-const savedTheme = localStorage.getItem('cs_theme') || (window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
+const savedTheme = safeGetStorage('cs_theme', window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
 applyTheme(savedTheme);
 
 if (themeToggle) {
   themeToggle.addEventListener('click', () => {
     const isLight = document.documentElement.getAttribute('data-theme') === 'light';
     const newTheme = isLight ? 'dark' : 'light';
-    localStorage.setItem('cs_theme', newTheme);
+    safeSetStorage('cs_theme', newTheme);
     applyTheme(newTheme);
   });
 }
@@ -104,6 +118,18 @@ const btnChoiceReceive = document.getElementById('btn-choice-receive');
 const btnBackFromSend = document.getElementById('btn-back-from-send');
 const btnBackFromReceive = document.getElementById('btn-back-from-receive');
 
+// Device Bar & Peer Recognition Elements
+const deviceBar = document.getElementById('device-bar');
+const deviceBarName = document.getElementById('device-bar-name');
+const deviceBarId = document.getElementById('device-bar-id');
+const deviceBarIcon = document.getElementById('device-bar-icon');
+const senderPeerPill = document.getElementById('sender-peer-pill');
+const senderPeerName = document.getElementById('sender-peer-name');
+const senderPeerIcon = document.getElementById('sender-peer-icon');
+const rxPeerPill = document.getElementById('rx-peer-pill');
+const rxPeerName = document.getElementById('rx-peer-name');
+const rxPeerIcon = document.getElementById('rx-peer-icon');
+
 // Sender Elements
 const fileInput = document.getElementById('file-input');
 const dropZone = document.getElementById('drop-zone');
@@ -159,8 +185,8 @@ const senderLocalIcon = document.getElementById('sender-local-icon');
 const senderLocalName = document.getElementById('sender-local-name');
 const senderLocalNet = document.getElementById('sender-local-net');
 const senderRelayRegion = document.getElementById('sender-relay-region');
-const senderPeerIcon = document.getElementById('sender-peer-icon');
-const senderPeerName = document.getElementById('sender-peer-name');
+const senderPeerNodeIcon = document.getElementById('sender-peer-node-icon');
+const senderPeerNodeName = document.getElementById('sender-peer-node-name');
 const senderPeerNet = document.getElementById('sender-peer-net');
 const senderMyId = document.getElementById('sender-my-id');
 const senderMyInfo = document.getElementById('sender-my-info');
@@ -178,8 +204,8 @@ const rxTelemetryToggle = document.getElementById('rx-telemetry-toggle');
 const rxTelemetryDrawer = document.getElementById('rx-telemetry-drawer');
 const rxTelemetryChevron = document.getElementById('rx-telemetry-chevron');
 const rxRttBadge = document.getElementById('rx-rtt-badge');
-const rxPeerIcon = document.getElementById('rx-peer-icon');
-const rxPeerName = document.getElementById('rx-peer-name');
+const rxPeerNodeIcon = document.getElementById('rx-peer-node-icon');
+const rxPeerNodeName = document.getElementById('rx-peer-node-name');
 const rxPeerNet = document.getElementById('rx-peer-net');
 const rxRelayRegion = document.getElementById('rx-relay-region');
 const rxLocalIcon = document.getElementById('rx-local-icon');
@@ -242,71 +268,118 @@ function updateTransferModeUI(role, mode) {
   }
 }
 
-// Cookie-Based Device Identification ("device gets forgotten if cookie cleared")
+// Cookie & Storage Device Identification
 function getCookie(name) {
-  const match = document.cookie.match(new RegExp('(^|;\\s*)(' + name + ')=([^;]*)'));
-  return match ? decodeURIComponent(match[3]) : null;
+  try {
+    const match = document.cookie.match(new RegExp('(^|;\\s*)(' + name + ')=([^;]*)'));
+    return match ? decodeURIComponent(match[3]) : null;
+  } catch (_) {
+    return null;
+  }
 }
 
 function setCookie(name, val, days = 30) {
-  const expires = new Date(Date.now() + days * 864e5).toUTCString();
-  document.cookie = `${name}=${encodeURIComponent(val)}; expires=${expires}; path=/; SameSite=Lax`;
+  try {
+    const expires = new Date(Date.now() + days * 864e5).toUTCString();
+    document.cookie = `${name}=${encodeURIComponent(val)}; expires=${expires}; path=/; SameSite=Lax`;
+  } catch (_) {}
 }
 
 function getOrCreateDeviceId() {
   let devId = getCookie('cs_device_id');
   if (!devId) {
+    devId = safeGetStorage('cs_device_id');
+  }
+  if (!devId) {
     devId = 'DEV-' + Math.random().toString(16).substring(2, 8).toUpperCase();
     setCookie('cs_device_id', devId, 30);
+    safeSetStorage('cs_device_id', devId);
   }
   return devId;
 }
 
 // Professional SVG device icons
-const SVG_LAPTOP = `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect><line x1="8" y1="21" x2="16" y2="21"></line><line x1="12" y1="17" x2="12" y2="21"></line></svg>`;
-const SVG_MOBILE = `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="2" width="14" height="20" rx="2" ry="2"></rect><line x1="12" y1="18" x2="12.01" y2="18"></line></svg>`;
+const SVG_LAPTOP = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect><line x1="8" y1="21" x2="16" y2="21"></line><line x1="12" y1="17" x2="12" y2="21"></line></svg>`;
+const SVG_MOBILE = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="2" width="14" height="20" rx="2" ry="2"></rect><line x1="12" y1="18" x2="12.01" y2="18"></line></svg>`;
 
-// Client Hardware, OS, Browser & Network Detection
+// Client Hardware, OS, Browser & Accurate Device Detection
 function detectDeviceInfo() {
   const ua = navigator.userAgent || '';
+  const platform = navigator.platform || '';
+  const maxTouchPoints = navigator.maxTouchPoints || 0;
+
   let os = 'Unknown OS';
-  if (/Macintosh|Mac OS X/i.test(ua)) os = 'macOS';
-  else if (/Windows/i.test(ua)) os = 'Windows';
+  if (/iPhone/i.test(ua)) os = 'iOS';
+  else if (/iPad/i.test(ua) || (platform === 'MacIntel' && maxTouchPoints > 1)) os = 'iPadOS';
   else if (/Android/i.test(ua)) os = 'Android';
-  else if (/iPhone|iPad|iPod/i.test(ua)) os = 'iOS';
+  else if (/Macintosh|Mac OS X/i.test(ua)) os = 'macOS';
+  else if (/Windows/i.test(ua)) os = 'Windows';
   else if (/Linux/i.test(ua)) os = 'Linux';
+
+  let deviceType = 'Desktop';
+  let deviceModel = 'PC';
+  if (/iPhone/i.test(ua)) {
+    deviceType = 'Phone';
+    deviceModel = 'iPhone';
+  } else if (/iPad/i.test(ua) || (platform === 'MacIntel' && maxTouchPoints > 1)) {
+    deviceType = 'Tablet';
+    deviceModel = 'iPad';
+  } else if (/Android/i.test(ua)) {
+    deviceType = /Mobile/i.test(ua) ? 'Phone' : 'Tablet';
+    if (/Samsung|SM-/i.test(ua)) deviceModel = 'Samsung Galaxy';
+    else if (/Pixel/i.test(ua)) deviceModel = 'Google Pixel';
+    else if (/Xiaomi|Redmi/i.test(ua)) deviceModel = 'Xiaomi';
+    else if (/OnePlus/i.test(ua)) deviceModel = 'OnePlus';
+    else deviceModel = 'Android ' + deviceType;
+  } else if (os === 'macOS') {
+    deviceModel = 'Mac';
+  } else if (os === 'Windows') {
+    deviceModel = 'Windows PC';
+  } else if (os === 'Linux') {
+    deviceModel = 'Linux PC';
+  }
 
   let browser = 'Browser';
   if (/Edg\//i.test(ua)) browser = 'Edge';
-  else if (/Chrome\//i.test(ua)) browser = 'Chrome';
-  else if (/Firefox\//i.test(ua)) browser = 'Firefox';
-  else if (/Safari\//i.test(ua)) browser = 'Safari';
-
-  let deviceType = 'Desktop';
-  if (/Mobile|Android|iPhone/i.test(ua)) {
-    deviceType = 'Phone';
-  } else if (/iPad|Tablet/i.test(ua)) {
-    deviceType = 'Tablet';
-  }
+  else if (/Chrome\/|CriOS\//i.test(ua)) browser = 'Chrome';
+  else if (/Firefox\/|FxiOS\//i.test(ua)) browser = 'Firefox';
+  else if (/SamsungBrowser\//i.test(ua)) browser = 'Samsung Internet';
+  else if (/Version\/.*Safari/i.test(ua) || /Safari/i.test(ua)) browser = 'Safari';
 
   let netType = 'Wi-Fi / LAN';
-  const conn = navigator.connection || navigator.mozConnection || navigator.webkitConnection;
-  if (conn) {
-    if (conn.type === 'cellular') {
-      netType = `Cellular (${conn.effectiveType ? conn.effectiveType.toUpperCase() : '5G/4G'})`;
-    } else if (conn.type === 'wifi') {
-      netType = `Wi-Fi (${conn.effectiveType ? conn.effectiveType.toUpperCase() : 'High-Speed'})`;
-    } else if (conn.effectiveType) {
-      netType = conn.effectiveType.toUpperCase();
+  try {
+    const conn = navigator.connection || navigator.mozConnection || navigator.webkitConnection;
+    if (conn) {
+      if (conn.type === 'cellular') {
+        netType = `Cellular (${conn.effectiveType ? conn.effectiveType.toUpperCase() : '5G/4G'})`;
+      } else if (conn.type === 'wifi') {
+        netType = 'Wi-Fi';
+      } else if (conn.effectiveType) {
+        netType = conn.effectiveType.toUpperCase();
+      }
     }
-  }
+  } catch (_) {}
 
   return {
     os,
     browser,
     deviceType,
+    deviceModel,
     network: netType,
+    displayName: `${deviceModel} (${browser})`,
   };
+}
+
+function updateLocalDeviceDisplay() {
+  try {
+    const dev = detectDeviceInfo();
+    const id = getOrCreateDeviceId();
+    if (deviceBarName) deviceBarName.textContent = dev.displayName;
+    if (deviceBarId) deviceBarId.textContent = id;
+    if (deviceBarIcon) {
+      deviceBarIcon.innerHTML = (dev.deviceType === 'Phone' || dev.deviceType === 'Tablet') ? SVG_MOBILE : SVG_LAPTOP;
+    }
+  } catch (_) {}
 }
 
 async function getNetworkInfo() {
@@ -399,6 +472,8 @@ async function sendPeerInfo(role, ws) {
     role: role,
     device_id: deviceId,
     device: dev.deviceType,
+    device_model: dev.deviceModel,
+    display_name: dev.displayName,
     os: dev.os,
     browser: dev.browser,
     network: dev.network,
@@ -407,33 +482,32 @@ async function sendPeerInfo(role, ws) {
 }
 
 function handlePeerInfo(role, msg) {
-  const peerIcon = role === 'sender' ? senderPeerIcon : rxPeerIcon;
-  const peerName = role === 'sender' ? senderPeerName : rxPeerName;
-  const peerNet = role === 'sender' ? senderPeerNet : rxPeerNet;
-  const peerId = role === 'sender' ? senderPeerId : rxPeerId;
-  const peerInfo = role === 'sender' ? senderPeerInfo : rxPeerInfo;
-  const peerNetPill = role === 'sender' ? senderPeerNetPill : rxPeerNetPill;
-  const peerNode = role === 'sender' ? document.getElementById('sender-hop-peer') : document.getElementById('rx-hop-peer');
+  const isSender = role === 'sender';
+  const peerPill = isSender ? senderPeerPill : rxPeerPill;
+  const peerName = isSender ? senderPeerName : rxPeerName;
+  const peerIcon = isSender ? senderPeerIcon : rxPeerIcon;
+  const peerNode = isSender ? document.getElementById('sender-hop-peer') : document.getElementById('rx-hop-peer');
+  const peerNodeName = isSender ? senderPeerNodeName : rxPeerNodeName;
+  const peerNodeIcon = isSender ? senderPeerNodeIcon : rxPeerNodeIcon;
+
+  const displayName = msg.display_name || `${msg.device_model || msg.device || 'Peer'} (${msg.browser || 'Browser'})`;
+  const isMobile = msg.device === 'Phone' || msg.device === 'Tablet';
+
+  if (peerName) peerName.textContent = `Connected: ${displayName}`;
+  if (peerIcon) peerIcon.innerHTML = isMobile ? SVG_MOBILE : SVG_LAPTOP;
+  if (peerPill) peerPill.classList.remove('hidden');
 
   if (peerNode) peerNode.classList.add('active');
-  if (peerIcon) {
-    peerIcon.innerHTML = (msg.device === 'Phone' || msg.device === 'Tablet') ? SVG_MOBILE : SVG_LAPTOP;
-  }
-  if (peerName) {
-    peerName.textContent = `${msg.browser || 'Peer'} on ${msg.os || 'Device'}`;
-  }
-  if (peerNet) {
-    peerNet.textContent = msg.network || 'Connected';
-  }
-  if (peerId) {
-    peerId.textContent = `ID: ${msg.device_id || '----'}`;
-  }
-  if (peerInfo) {
-    peerInfo.textContent = `${msg.browser || 'Browser'} • ${msg.os || 'OS'}`;
-  }
-  if (peerNetPill) {
-    peerNetPill.textContent = `${msg.network || 'Network'} • ${msg.location || 'Remote'}`;
-  }
+  if (peerNodeName) peerNodeName.textContent = displayName;
+  if (peerNodeIcon) peerNodeIcon.innerHTML = isMobile ? SVG_MOBILE : SVG_LAPTOP;
+
+  const peerId = isSender ? senderPeerId : rxPeerId;
+  const peerInfo = isSender ? senderPeerInfo : rxPeerInfo;
+  const peerNetPill = isSender ? senderPeerNetPill : rxPeerNetPill;
+
+  if (peerId) peerId.textContent = `ID: ${msg.device_id || '----'}`;
+  if (peerInfo) peerInfo.textContent = `${msg.browser || 'Browser'} • ${msg.os || 'OS'}`;
+  if (peerNetPill) peerNetPill.textContent = `${msg.network || 'Network'} • ${msg.location || 'Remote'}`;
 }
 
 // Chunk Transmission Matrix
@@ -688,16 +762,44 @@ fileInput.addEventListener('change', (e) => {
   }
 });
 
-const defaultCopyHtml = `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg><span>Copy Code</span>`;
-const copiedHtml = `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg><span style="color:var(--success)">Copied!</span>`;
+async function copyToClipboard(text) {
+  if (navigator.clipboard && window.isSecureContext) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch (_) {}
+  }
+  try {
+    const textarea = document.createElement('textarea');
+    textarea.value = text;
+    textarea.style.position = 'fixed';
+    textarea.style.left = '-9999px';
+    textarea.style.top = '0';
+    textarea.setAttribute('readonly', '');
+    document.body.appendChild(textarea);
+    textarea.focus();
+    textarea.select();
+    const successful = document.execCommand('copy');
+    document.body.removeChild(textarea);
+    return successful;
+  } catch (err) {
+    return false;
+  }
+}
 
-btnCopyCode.addEventListener('click', () => {
-  if (!currentCode) return;
-  navigator.clipboard.writeText(currentCode).then(() => {
-    btnCopyCode.innerHTML = copiedHtml;
-    setTimeout(() => { btnCopyCode.innerHTML = defaultCopyHtml; }, 1800);
+const defaultCopyHtml = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg><span>Copy Code</span>`;
+const copiedHtml = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg><span style="color:var(--status-green)">Copied!</span>`;
+
+if (btnCopyCode) {
+  btnCopyCode.addEventListener('click', async () => {
+    if (!currentCode) return;
+    const ok = await copyToClipboard(currentCode);
+    if (ok) {
+      btnCopyCode.innerHTML = copiedHtml;
+      setTimeout(() => { btnCopyCode.innerHTML = defaultCopyHtml; }, 1600);
+    }
   });
-});
+}
 
 window.addEventListener('resize', () => {
   if (senderTelemetryDrawer && !senderTelemetryDrawer.classList.contains('hidden')) {
@@ -1254,6 +1356,7 @@ function resetSender() {
   senderStepPick.classList.remove('hidden');
   senderStepTransfer.classList.add('hidden');
   senderActiveControls.classList.add('hidden');
+  if (senderPeerPill) senderPeerPill.classList.add('hidden');
   fileInput.value = '';
 }
 
@@ -1433,7 +1536,9 @@ async function completeReceiverFile(filename, mimeType) {
     document.body.appendChild(tempLink);
     tempLink.click();
     document.body.removeChild(tempLink);
-    URL.revokeObjectURL(url);
+    setTimeout(() => {
+      try { URL.revokeObjectURL(url); } catch (_) {}
+    }, 60000);
     rxChunksMap.clear();
     rxStatusFinished.textContent = 'File downloaded to your browser.';
   }
@@ -1493,4 +1598,9 @@ function resetReceiver() {
   rxClearedBox.classList.add('hidden');
   rxProgressBox.classList.remove('hidden');
   rxActiveControls.classList.remove('hidden');
+  if (rxPeerPill) rxPeerPill.classList.add('hidden');
 }
+
+// Initial UI setup
+updateLocalDeviceDisplay();
+
