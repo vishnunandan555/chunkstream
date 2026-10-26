@@ -107,8 +107,7 @@ let senderStartTime = 0;
 
 let rxBytesReceived = 0;
 let rxStartTime = 0;
-let rxWritableStream = null;
-let rxChunksMap = new Map(); // In-memory fallback
+let rxChunksMap = new Map(); // In-memory chunk buffer until complete
 let rxReceivedIndices = new Set();
 let rxTransferData = null;
 
@@ -743,20 +742,6 @@ async function startReceiving() {
     }
   } catch (_) {}
 
-  // Request destination file handle on supported desktop browsers
-  rxWritableStream = null;
-  if ('showSaveFilePicker' in window && rxTransferData) {
-    try {
-      const handle = await window.showSaveFilePicker({
-        suggestedName: rxTransferData.filename,
-      });
-      rxWritableStream = await handle.createWritable();
-    } catch (e) {
-      // User cancelled picker or unsupported: fallback to in-memory blob assembly
-      rxWritableStream = null;
-    }
-  }
-
   receiverStepInput.classList.add('hidden');
   receiverStepTransfer.classList.remove('hidden');
   rxStatusDot.className = 'status-dot green';
@@ -819,14 +804,7 @@ async function handleReceiverChunk(msg) {
   }
 
   const uint8 = base64ToUint8Array(data);
-
-  if (rxWritableStream) {
-    const offset = index * chunkSize;
-    await rxWritableStream.write({ type: 'write', position: offset, data: uint8 });
-  } else {
-    rxChunksMap.set(index, uint8);
-  }
-
+  rxChunksMap.set(index, uint8);
   rxReceivedIndices.add(index);
   rxBytesReceived += uint8.byteLength;
 
@@ -866,33 +844,29 @@ async function completeReceiverFile(filename, mimeType) {
   rxStatusText.textContent = 'Download complete!';
   rxActiveControls.classList.add('hidden');
 
-  if (rxWritableStream) {
-    await rxWritableStream.close();
-    rxWritableStream = null;
-    rxStatusFinished.textContent = 'File saved directly to your device.';
-  } else if (rxChunksMap.size > 0) {
-    // Fallback: assemble Blob in memory and trigger download
-    const sortedChunks = [];
-    for (let i = 0; i < rxReceivedIndices.size; i++) {
-      if (rxChunksMap.has(i)) {
-        sortedChunks.push(rxChunksMap.get(i));
-      }
+  // Assemble file from received chunks and trigger standard browser download
+  const sortedChunks = [];
+  for (let i = 0; i < rxReceivedIndices.size; i++) {
+    if (rxChunksMap.has(i)) {
+      sortedChunks.push(rxChunksMap.get(i));
     }
-    const blob = new Blob(sortedChunks, { type: mimeType || 'application/octet-stream' });
-    const url = URL.createObjectURL(blob);
-    const tempLink = document.createElement('a');
-    tempLink.href = url;
-    tempLink.download = filename || 'download';
-    document.body.appendChild(tempLink);
-    tempLink.click();
-    document.body.removeChild(tempLink);
-    setTimeout(() => {
-      try { URL.revokeObjectURL(url); } catch (_) {}
-    }, 60000);
-    rxChunksMap.clear();
-    rxStatusFinished.textContent = 'File downloaded to your device.';
   }
 
+  const blob = new Blob(sortedChunks, { type: mimeType || 'application/octet-stream' });
+  const url = URL.createObjectURL(blob);
+  const tempLink = document.createElement('a');
+  tempLink.href = url;
+  tempLink.download = filename || 'download';
+  document.body.appendChild(tempLink);
+  tempLink.click();
+  document.body.removeChild(tempLink);
+
+  setTimeout(() => {
+    try { URL.revokeObjectURL(url); } catch (_) {}
+  }, 60000);
+
+  rxChunksMap.clear();
+  rxStatusFinished.textContent = 'File downloaded to your device.';
   rxClearedBox.classList.remove('hidden');
 }
 
@@ -903,10 +877,6 @@ async function cancelReceive() {
     receiverWs.send(JSON.stringify({ type: 'cancel' }));
     receiverWs.close();
     receiverWs = null;
-  }
-  if (rxWritableStream) {
-    try { await rxWritableStream.abort(); } catch (_) {}
-    rxWritableStream = null;
   }
   rxChunksMap.clear();
   rxReceivedIndices.clear();
@@ -922,10 +892,6 @@ function resetReceiver() {
   if (receiverWs) {
     receiverWs.close();
     receiverWs = null;
-  }
-  if (rxWritableStream) {
-    try { rxWritableStream.abort(); } catch (_) {}
-    rxWritableStream = null;
   }
   rxChunksMap.clear();
   rxReceivedIndices.clear();
