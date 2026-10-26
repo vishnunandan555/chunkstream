@@ -59,11 +59,16 @@ function formatBytes(bytes) {
 }
 
 function formatDuration(sec) {
-  if (!isFinite(sec) || sec <= 0) return '--';
+  if (!isFinite(sec) || sec < 0) return '--';
+  if (sec === 0) return '0s';
   if (sec < 60) return `${Math.ceil(sec)}s`;
+  if (sec > 86400) return '--'; // Outlier guard (> 24 hours)
   const m = Math.floor(sec / 60);
   const s = Math.ceil(sec % 60);
-  return `${m}m ${s}s`;
+  if (m < 60) return `${m}m ${s}s`;
+  const h = Math.floor(m / 60);
+  const remM = m % 60;
+  return `${h}h ${remM}m`;
 }
 
 function generate4DigitCode() {
@@ -116,6 +121,20 @@ let isPumping = false;
 let senderPingTimer = null;
 let rxPingTimer = null;
 
+// WebRTC Direct LAN DataChannel State
+let rtcPeerConn = null;
+let rtcDataChannel = null;
+let isWebRtcReady = false;
+let webRtcRole = null;
+let webRtcNegotiationTimer = null;
+
+const RTC_CONFIG = {
+  iceServers: [
+    { urls: 'stun:stun.l.google.com:19302' },
+    { urls: 'stun:stun1.l.google.com:19302' },
+  ],
+};
+
 // DOM Elements - Navigation & Device
 const homeLink = document.getElementById('home-link');
 const btnChoiceSend = document.getElementById('btn-choice-send');
@@ -146,6 +165,7 @@ const senderProgressFill = document.getElementById('sender-progress-fill');
 const senderProgressPct = document.getElementById('sender-progress-pct');
 const senderSpeed = document.getElementById('sender-speed');
 const senderEta = document.getElementById('sender-eta');
+const senderRouteMode = document.getElementById('sender-route-mode');
 const senderProgressBytes = document.getElementById('sender-progress-bytes');
 const senderProgressChunks = document.getElementById('sender-progress-chunks');
 const senderActiveControls = document.getElementById('sender-active-controls');
@@ -172,6 +192,7 @@ const rxProgressFill = document.getElementById('rx-progress-fill');
 const rxProgressPct = document.getElementById('rx-progress-pct');
 const rxSpeed = document.getElementById('rx-speed');
 const rxEta = document.getElementById('rx-eta');
+const rxRouteMode = document.getElementById('rx-route-mode');
 const rxProgressBytes = document.getElementById('rx-progress-bytes');
 const rxProgressChunks = document.getElementById('rx-progress-chunks');
 const rxActiveControls = document.getElementById('rx-active-controls');
@@ -192,7 +213,7 @@ function addActivityLog(role, message) {
   row.innerHTML = `<span class="log-time">${timeStr}</span><span class="log-text">${message}</span>`;
   list.appendChild(row);
   list.scrollTop = list.scrollHeight;
-  while (list.children.length > 30) {
+  while (list.children.length > 80) {
     list.removeChild(list.firstChild);
   }
 }
@@ -319,16 +340,23 @@ if (homeLink) {
 
 if (btnChoiceSend) {
   btnChoiceSend.addEventListener('click', () => {
-    if (currentFile && isStreaming) return;
+    const isActivelyReceiving = receiverWs && receiverWs.readyState === WebSocket.OPEN && rxBytesReceived > 0 && rxReceivedIndices.size < (rxTransferData ? rxTransferData.total_chunks : Infinity);
+    if (isActivelyReceiving) return;
     showView(viewSend);
   });
 }
 
 if (btnChoiceReceive) {
   btnChoiceReceive.addEventListener('click', () => {
-    if (rxBytesReceived > 0) return;
+    if (currentFile && isStreaming && !isPaused) return;
+    const isActivelyReceiving = receiverWs && receiverWs.readyState === WebSocket.OPEN && rxBytesReceived > 0 && rxReceivedIndices.size < (rxTransferData ? rxTransferData.total_chunks : Infinity);
+    if (!isActivelyReceiving && rxBytesReceived > 0) {
+      resetReceiver();
+    }
     showView(viewReceive);
-    setTimeout(() => receiveCodeInput.focus(), 60);
+    setTimeout(() => {
+      if (receiveCodeInput) receiveCodeInput.focus();
+    }, 60);
   });
 }
 
@@ -384,6 +412,201 @@ if (btnCopyCode) {
       }, 1800);
     }
   });
+}
+
+// ==========================================
+// WebRTC Direct LAN (P2P) Engine
+// ==========================================
+function updateRouteDisplay(role, mode) {
+  const isDirect = mode === 'lan' || mode === 'Direct LAN (P2P)';
+  const label = isDirect ? 'Direct LAN' : 'Cloud Relay';
+  const cls = isDirect ? 'stat-val stat-route mode-lan' : 'stat-val stat-route mode-cloud';
+
+  if (senderRouteMode) {
+    senderRouteMode.textContent = label;
+    senderRouteMode.className = cls;
+  }
+  if (rxRouteMode) {
+    rxRouteMode.textContent = label;
+    rxRouteMode.className = cls;
+  }
+}
+
+function closeWebRTC() {
+  if (webRtcNegotiationTimer) {
+    clearTimeout(webRtcNegotiationTimer);
+    webRtcNegotiationTimer = null;
+  }
+  if (rtcDataChannel) {
+    try { rtcDataChannel.close(); } catch (_) {}
+    rtcDataChannel = null;
+  }
+  if (rtcPeerConn) {
+    try { rtcPeerConn.close(); } catch (_) {}
+    rtcPeerConn = null;
+  }
+  isWebRtcReady = false;
+  webRtcRole = null;
+}
+
+function initWebRTC(role) {
+  closeWebRTC();
+  webRtcRole = role;
+
+  if (!window.RTCPeerConnection) {
+    addActivityLog(role, 'WebRTC not available in browser • Using Cloud Relay');
+    updateRouteDisplay(role, 'cloud');
+    return;
+  }
+
+  try {
+    rtcPeerConn = new RTCPeerConnection(RTC_CONFIG);
+
+    rtcPeerConn.onicecandidate = (event) => {
+      if (event.candidate) {
+        const ws = role === 'sender' ? senderWs : receiverWs;
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({
+            type: 'signal_candidate',
+            candidate: event.candidate,
+          }));
+        }
+      }
+    };
+
+    rtcPeerConn.onconnectionstatechange = () => {
+      if (!rtcPeerConn) return;
+      const state = rtcPeerConn.connectionState;
+      addActivityLog(role, `WebRTC Connection: ${state}`);
+      if (state === 'failed' || state === 'disconnected') {
+        isWebRtcReady = false;
+        updateRouteDisplay(role, 'cloud');
+      }
+    };
+
+    if (role === 'sender') {
+      try {
+        rtcDataChannel = rtcPeerConn.createDataChannel('chunkstream', { ordered: true });
+        setupDataChannel(rtcDataChannel, 'sender');
+      } catch (err) {
+        console.warn('Failed to create RTCDataChannel:', err);
+      }
+
+      rtcPeerConn.createOffer()
+        .then((offer) => rtcPeerConn.setLocalDescription(offer))
+        .then(() => {
+          if (senderWs && senderWs.readyState === WebSocket.OPEN) {
+            senderWs.send(JSON.stringify({
+              type: 'signal_offer',
+              offer: rtcPeerConn.localDescription,
+            }));
+            addActivityLog('sender', 'WebRTC: P2P offer dispatched to peer');
+          }
+        })
+        .catch((err) => {
+          console.warn('WebRTC offer error:', err);
+          updateRouteDisplay('sender', 'cloud');
+        });
+
+      // 4s fallback timer to Cloud Relay if LAN negotiation is blocked by firewall
+      webRtcNegotiationTimer = setTimeout(() => {
+        if (!isWebRtcReady) {
+          addActivityLog('sender', 'WebRTC negotiation timeout • Continuing via Cloud Relay');
+          updateRouteDisplay('sender', 'cloud');
+          if (!isStreaming && currentFile) {
+            startStreamingChunks();
+          }
+        }
+      }, 4000);
+
+    } else if (role === 'receiver') {
+      rtcPeerConn.ondatachannel = (event) => {
+        rtcDataChannel = event.channel;
+        setupDataChannel(rtcDataChannel, 'receiver');
+      };
+    }
+  } catch (err) {
+    console.warn('WebRTC initialization error:', err);
+    updateRouteDisplay(role, 'cloud');
+  }
+}
+
+function setupDataChannel(channel, role) {
+  if (!channel) return;
+
+  channel.onopen = () => {
+    isWebRtcReady = true;
+    if (webRtcNegotiationTimer) {
+      clearTimeout(webRtcNegotiationTimer);
+      webRtcNegotiationTimer = null;
+    }
+    updateRouteDisplay(role, 'lan');
+    addActivityLog(role, 'Direct LAN (P2P) DataChannel OPEN • Direct high-speed link');
+
+    if (role === 'sender' && !isStreaming && currentFile) {
+      startStreamingChunks();
+    }
+  };
+
+  channel.onclose = () => {
+    isWebRtcReady = false;
+    updateRouteDisplay(role, 'cloud');
+    addActivityLog(role, 'P2P DataChannel closed • Using Cloud Relay');
+  };
+
+  channel.onerror = (err) => {
+    console.warn('RTCDataChannel error:', err);
+    isWebRtcReady = false;
+    updateRouteDisplay(role, 'cloud');
+  };
+
+  channel.onmessage = (event) => {
+    try {
+      const msg = JSON.parse(event.data);
+      if (role === 'receiver') {
+        if (msg.type === 'chunk' || msg.type === 'chunk_data') {
+          handleReceiverChunk(msg);
+        }
+      } else if (role === 'sender') {
+        if (msg.type === 'chunk_ack' || msg.type === 'rx_ack') {
+          handleChunkAck(msg.index);
+        }
+      }
+    } catch (e) {
+      console.error('DataChannel msg parse error:', e);
+    }
+  };
+}
+
+async function handleWebRTCSignal(role, msg) {
+  if (!rtcPeerConn && (msg.type === 'signal_offer' || msg.type === 'signal_candidate')) {
+    initWebRTC(role);
+  }
+  if (!rtcPeerConn) return;
+
+  try {
+    if (msg.type === 'signal_offer' && role === 'receiver') {
+      await rtcPeerConn.setRemoteDescription(new RTCSessionDescription(msg.offer));
+      const answer = await rtcPeerConn.createAnswer();
+      await rtcPeerConn.setLocalDescription(answer);
+      if (receiverWs && receiverWs.readyState === WebSocket.OPEN) {
+        receiverWs.send(JSON.stringify({
+          type: 'signal_answer',
+          answer: rtcPeerConn.localDescription,
+        }));
+        addActivityLog('rx', 'WebRTC: P2P answer dispatched to sender');
+      }
+    } else if (msg.type === 'signal_answer' && role === 'sender') {
+      await rtcPeerConn.setRemoteDescription(new RTCSessionDescription(msg.answer));
+      addActivityLog('sender', 'WebRTC: Remote answer set • P2P handshake complete');
+    } else if (msg.type === 'signal_candidate') {
+      if (msg.candidate) {
+        await rtcPeerConn.addIceCandidate(new RTCIceCandidate(msg.candidate));
+      }
+    }
+  } catch (err) {
+    console.warn('WebRTC signal handling error:', err);
+  }
 }
 
 // ==========================================
@@ -506,20 +729,20 @@ function connectSenderWebSocket() {
       if (msg.type === 'peer_connected' && msg.role === 'receiver') {
         sendPeerInfo('sender', senderWs);
         senderStatusDot.className = 'status-dot green';
-        senderStatusText.textContent = 'Receiver connected. Starting stream...';
-        addActivityLog('sender', 'Receiver connected • Initiating live stream...');
-        if (!isPaused && !isStreaming) {
-          startStreamingChunks();
-        }
+        senderStatusText.textContent = 'Receiver connected. Establishing direct link...';
+        addActivityLog('sender', 'Receiver connected • Initiating Direct LAN handshake...');
+        initWebRTC('sender');
       } else if (msg.type === 'peer_info') {
         if (msg.role === 'receiver' || msg.role === 'rx') {
           handlePeerInfo('sender', msg);
           const devName = msg.display_name || `${msg.device_model || msg.device || 'Peer'} (${msg.browser || 'Browser'})`;
           addActivityLog('sender', `Peer identified: <strong>${escapeHtml(devName)}</strong>`);
-          if (!isPaused && !isStreaming && currentFile) {
-            startStreamingChunks();
+          if (!rtcPeerConn) {
+            initWebRTC('sender');
           }
         }
+      } else if (msg.type === 'signal_answer' || msg.type === 'signal_candidate') {
+        handleWebRTCSignal('sender', msg);
       } else if (msg.type === 'chunk_ack' || msg.type === 'rx_ack') {
         handleChunkAck(msg.index);
       } else if (msg.type === 'peer_disconnected') {
@@ -560,9 +783,10 @@ function connectSenderWebSocket() {
         startStreamingChunks();
       } else if (msg.type === 'transfer_cancelled' || msg.type === 'peer_cancelled') {
         if (msg.role !== 'sender') {
-          addActivityLog('sender', 'Transfer cancelled by receiver');
-          alert('Transfer was cancelled by receiver.');
-          resetSender();
+          addActivityLog('sender', 'Transfer cancelled by receiver • Memory purged');
+          senderStatusDot.className = 'status-dot';
+          senderStatusText.textContent = 'Transfer was cancelled by receiver.';
+          setTimeout(() => { resetSender(); }, 1200);
         }
       } else if (msg.type === 'ping') {
         if (senderWs && senderWs.readyState === WebSocket.OPEN) {
@@ -619,15 +843,19 @@ function handlePeerInfo(role, msg) {
   if (peerPill) peerPill.classList.remove('hidden');
 }
 
-// Maximum chunks simultaneously in flight
-const MAX_IN_FLIGHT = 6;
+function getMaxInFlight() {
+  return (isWebRtcReady && rtcDataChannel && rtcDataChannel.readyState === 'open') ? 12 : 6;
+}
 
 async function pumpPipeline() {
-  if (isPumping || isPaused || !isStreaming || !senderWs || senderWs.readyState !== WebSocket.OPEN || !currentFile) return;
+  const isChannelOpen = isWebRtcReady && rtcDataChannel && rtcDataChannel.readyState === 'open';
+  const isWsOpen = senderWs && senderWs.readyState === WebSocket.OPEN;
+  if (isPumping || isPaused || !isStreaming || (!isChannelOpen && !isWsOpen) || !currentFile) return;
 
+  const maxInFlight = getMaxInFlight();
   isPumping = true;
   try {
-    while (inFlightChunks.size < MAX_IN_FLIGHT && (ackedChunks.size + inFlightChunks.size) < totalChunks) {
+    while (inFlightChunks.size < maxInFlight && (ackedChunks.size + inFlightChunks.size) < totalChunks) {
       let nextIdx = -1;
       for (let i = 0; i < totalChunks; i++) {
         if (!ackedChunks.has(i) && !inFlightChunks.has(i)) {
@@ -646,18 +874,33 @@ async function pumpPipeline() {
 
       try {
         const buf = await slice.arrayBuffer();
-        if (!isStreaming || isPaused || !senderWs || senderWs.readyState !== WebSocket.OPEN) {
+        if (!isStreaming || isPaused) {
           inFlightChunks.delete(nextIdx);
           inFlightTimestamps.delete(nextIdx);
           break;
         }
         const b64 = arrayBufferToBase64(buf);
-        senderWs.send(JSON.stringify({
+        const chunkMsg = JSON.stringify({
           type: 'chunk',
           index: nextIdx,
           data: b64,
           total: totalChunks,
-        }));
+        });
+
+        if (isWebRtcReady && rtcDataChannel && rtcDataChannel.readyState === 'open') {
+          if (rtcDataChannel.bufferedAmount > 4 * 1024 * 1024) {
+            inFlightChunks.delete(nextIdx);
+            inFlightTimestamps.delete(nextIdx);
+            break;
+          }
+          rtcDataChannel.send(chunkMsg);
+        } else if (senderWs && senderWs.readyState === WebSocket.OPEN) {
+          senderWs.send(chunkMsg);
+        } else {
+          inFlightChunks.delete(nextIdx);
+          inFlightTimestamps.delete(nextIdx);
+          break;
+        }
       } catch (err) {
         console.error('Slice read error at chunk', nextIdx, err);
         inFlightChunks.delete(nextIdx);
@@ -671,13 +914,15 @@ async function pumpPipeline() {
 }
 
 async function startStreamingChunks(specificIndices = null) {
-  if (!currentFile || !senderWs || senderWs.readyState !== WebSocket.OPEN) return;
+  const isChannelOpen = isWebRtcReady && rtcDataChannel && rtcDataChannel.readyState === 'open';
+  const isWsOpen = senderWs && senderWs.readyState === WebSocket.OPEN;
+  if (!currentFile || (!isChannelOpen && !isWsOpen)) return;
 
   isStreaming = true;
   isPaused = false;
   if (senderStartTime === 0) senderStartTime = Date.now();
   senderStatusDot.className = 'status-dot green';
-  senderStatusText.textContent = 'Streaming directly to receiver...';
+  senderStatusText.textContent = isChannelOpen ? 'Streaming directly over LAN (P2P)...' : 'Streaming directly to receiver...';
   senderProgressBox.classList.remove('hidden');
   senderActiveControls.classList.remove('hidden');
 
@@ -696,7 +941,9 @@ async function startStreamingChunks(specificIndices = null) {
 
   if (!pipelineWatchdog) {
     pipelineWatchdog = setInterval(() => {
-      if (!isStreaming || isPaused || !senderWs || senderWs.readyState !== WebSocket.OPEN) return;
+      const isChOpen = isWebRtcReady && rtcDataChannel && rtcDataChannel.readyState === 'open';
+      const isWOpen = senderWs && senderWs.readyState === WebSocket.OPEN;
+      if (!isStreaming || isPaused || (!isChOpen && !isWOpen)) return;
       const now = Date.now();
       let hasTimedOut = false;
       for (const [idx, ts] of inFlightTimestamps.entries()) {
@@ -706,7 +953,7 @@ async function startStreamingChunks(specificIndices = null) {
           hasTimedOut = true;
         }
       }
-      if (hasTimedOut || (inFlightChunks.size < MAX_IN_FLIGHT && (ackedChunks.size + inFlightChunks.size) < totalChunks)) {
+      if (hasTimedOut || (inFlightChunks.size < getMaxInFlight() && (ackedChunks.size + inFlightChunks.size) < totalChunks)) {
         pumpPipeline();
       }
     }, 1000);
@@ -716,6 +963,7 @@ async function startStreamingChunks(specificIndices = null) {
 }
 
 function handleChunkAck(index) {
+  if (ackedChunks.has(index)) return; // Avoid duplicate ACK processing
   inFlightChunks.delete(index);
   inFlightTimestamps.delete(index);
   ackedChunks.add(index);
@@ -728,7 +976,9 @@ function handleChunkAck(index) {
   senderProgressPct.textContent = `${pct}%`;
 
   const elapsedSec = (Date.now() - senderStartTime) / 1000;
-  if (elapsedSec > 0.5) {
+  if (ackedChunks.size === totalChunks || pct >= 100) {
+    senderEta.textContent = '0s';
+  } else if (elapsedSec > 1.0 && ackedChunks.size >= 2) {
     const bytesPerSec = bytesSent / elapsedSec;
     const mbps = bytesPerSec / (1024 * 1024);
     senderSpeed.textContent = `${mbps.toFixed(1)} MB/s`;
@@ -736,6 +986,8 @@ function handleChunkAck(index) {
     const remainingBytes = Math.max(0, totalBytes - bytesSent);
     const etaSec = bytesPerSec > 0 ? remainingBytes / bytesPerSec : 0;
     senderEta.textContent = formatDuration(etaSec);
+  } else {
+    senderEta.textContent = '--';
   }
 
   senderProgressBytes.textContent = `${formatBytes(bytesSent)} / ${formatBytes(totalBytes)}`;
@@ -749,6 +1001,7 @@ function handleChunkAck(index) {
 
   if (ackedChunks.size === totalChunks) {
     isStreaming = false;
+    senderEta.textContent = '0s';
     if (pipelineWatchdog) {
       clearInterval(pipelineWatchdog);
       pipelineWatchdog = null;
@@ -809,6 +1062,7 @@ btnSendAgain.addEventListener('click', () => {
 
 function cancelTransfer() {
   const codeToDelete = currentCode;
+  closeWebRTC();
   if (pipelineWatchdog) {
     clearInterval(pipelineWatchdog);
     pipelineWatchdog = null;
@@ -835,6 +1089,7 @@ function resetSender() {
     clearInterval(pipelineWatchdog);
     pipelineWatchdog = null;
   }
+  closeWebRTC();
   isPumping = false;
   if (senderWs) {
     try { senderWs.close(); } catch (_) {}
@@ -854,6 +1109,10 @@ function resetSender() {
   senderActiveControls.classList.add('hidden');
   if (senderPeerPill) senderPeerPill.classList.add('hidden');
   if (senderActivityList) senderActivityList.innerHTML = '';
+  if (senderRouteMode) {
+    senderRouteMode.textContent = 'Direct LAN';
+    senderRouteMode.className = 'stat-val stat-route mode-lan';
+  }
   fileInput.value = '';
 }
 
@@ -924,13 +1183,15 @@ function connectReceiverWebSocket(code) {
       const msg = JSON.parse(e.data);
       if (msg.type === 'peer_connected' && msg.role === 'sender') {
         sendPeerInfo('rx', receiverWs);
-        addActivityLog('rx', 'Sender connected • Ready to stream chunks');
+        addActivityLog('rx', 'Sender connected • Listening for direct stream...');
       } else if (msg.type === 'peer_info') {
         if (msg.role === 'sender') {
           handlePeerInfo('rx', msg);
           const devName = msg.display_name || `${msg.device_model || msg.device || 'Peer'} (${msg.browser || 'Browser'})`;
           addActivityLog('rx', `Peer identified: <strong>${escapeHtml(devName)}</strong>`);
         }
+      } else if (msg.type === 'signal_offer' || msg.type === 'signal_candidate') {
+        handleWebRTCSignal('receiver', msg);
       } else if (msg.type === 'chunk' || msg.type === 'chunk_data') {
         await handleReceiverChunk(msg);
       } else if (msg.type === 'peer_disconnected') {
@@ -950,9 +1211,10 @@ function connectReceiverWebSocket(code) {
         addActivityLog('rx', 'Transfer resumed by sender');
       } else if (msg.type === 'transfer_cancelled' || msg.type === 'peer_cancelled') {
         if (msg.role !== 'receiver') {
-          addActivityLog('rx', 'Transfer cancelled by sender');
-          alert('Transfer was cancelled by sender.');
-          resetReceiver();
+          addActivityLog('rx', 'Transfer cancelled by sender • Memory purged');
+          rxStatusDot.className = 'status-dot';
+          rxStatusText.textContent = 'Transfer was cancelled by sender.';
+          setTimeout(() => { resetReceiver(); }, 1200);
         }
       } else if (msg.type === 'ping') {
         if (receiverWs && receiverWs.readyState === WebSocket.OPEN) {
@@ -991,9 +1253,12 @@ async function handleReceiverChunk(msg) {
   rxReceivedIndices.add(index);
   rxBytesReceived += uint8.byteLength;
 
-  // Send ACK back to sender
-  if (receiverWs && receiverWs.readyState === WebSocket.OPEN) {
-    receiverWs.send(JSON.stringify({ type: 'chunk_ack', index: index }));
+  // Send ACK back to sender (direct via DataChannel or via WebSocket relay)
+  const ackPayload = JSON.stringify({ type: 'chunk_ack', index: index });
+  if (isWebRtcReady && rtcDataChannel && rtcDataChannel.readyState === 'open') {
+    try { rtcDataChannel.send(ackPayload); } catch (_) {}
+  } else if (receiverWs && receiverWs.readyState === WebSocket.OPEN) {
+    try { receiverWs.send(ackPayload); } catch (_) {}
   }
 
   // Update Progress
@@ -1004,7 +1269,9 @@ async function handleReceiverChunk(msg) {
   rxProgressPct.textContent = `${pct}%`;
 
   const elapsedSec = (Date.now() - rxStartTime) / 1000;
-  if (elapsedSec > 0.5) {
+  if (rxReceivedIndices.size === total || pct >= 100) {
+    rxEta.textContent = '0s';
+  } else if (elapsedSec > 1.0 && rxReceivedIndices.size >= 2) {
     const bytesPerSec = rxBytesReceived / elapsedSec;
     const mbps = bytesPerSec / (1024 * 1024);
     rxSpeed.textContent = `${mbps.toFixed(1)} MB/s`;
@@ -1012,6 +1279,8 @@ async function handleReceiverChunk(msg) {
     const remaining = Math.max(0, totalExpected - rxBytesReceived);
     const etaSec = bytesPerSec > 0 ? remaining / bytesPerSec : 0;
     rxEta.textContent = formatDuration(etaSec);
+  } else {
+    rxEta.textContent = '--';
   }
 
   rxProgressBytes.textContent = `${formatBytes(rxBytesReceived)} / ${formatBytes(totalExpected)}`;
@@ -1032,6 +1301,7 @@ async function handleReceiverChunk(msg) {
 async function completeReceiverFile(filename, mimeType) {
   rxStatusDot.className = 'status-dot green';
   rxStatusText.textContent = 'Download complete!';
+  rxEta.textContent = '0s';
   rxActiveControls.classList.add('hidden');
   addActivityLog('rx', `All chunks buffered! Assembling file in memory...`);
 
@@ -1057,6 +1327,9 @@ async function completeReceiverFile(filename, mimeType) {
   const blob = new Blob(sortedChunks, { type: mimeType || 'application/octet-stream' });
   // Immediately clear chunk references to free client RAM
   sortedChunks.length = 0;
+  for (const k of rxChunksMap.keys()) {
+    rxChunksMap.set(k, null);
+  }
   rxChunksMap.clear();
   rxReceivedIndices.clear();
 
@@ -1085,12 +1358,16 @@ async function completeReceiverFile(filename, mimeType) {
 btnCancelReceive.addEventListener('click', cancelReceive);
 
 function cancelReceive() {
+  closeWebRTC();
   if (receiverWs) {
     if (receiverWs.readyState === WebSocket.OPEN) {
       try { receiverWs.send(JSON.stringify({ type: 'cancel' })); } catch (_) {}
     }
     try { receiverWs.close(); } catch (_) {}
     receiverWs = null;
+  }
+  for (const k of rxChunksMap.keys()) {
+    rxChunksMap.set(k, null);
   }
   rxChunksMap.clear();
   rxReceivedIndices.clear();
@@ -1099,7 +1376,8 @@ function cancelReceive() {
 
 btnReceiveAgain.addEventListener('click', () => {
   resetReceiver();
-  receiveCodeInput.focus();
+  showView(viewReceive);
+  if (receiveCodeInput) receiveCodeInput.focus();
 });
 
 function resetReceiver() {
@@ -1107,23 +1385,31 @@ function resetReceiver() {
     clearInterval(rxPingTimer);
     rxPingTimer = null;
   }
+  closeWebRTC();
   if (receiverWs) {
     try { receiverWs.close(); } catch (_) {}
     receiverWs = null;
+  }
+  for (const k of rxChunksMap.keys()) {
+    rxChunksMap.set(k, null);
   }
   rxChunksMap.clear();
   rxReceivedIndices.clear();
   rxBytesReceived = 0;
   rxStartTime = 0;
   rxTransferData = null;
-  receiveCodeInput.value = '';
-  receiverStepInput.classList.remove('hidden');
-  receiverStepTransfer.classList.add('hidden');
-  rxClearedBox.classList.add('hidden');
-  rxProgressBox.classList.remove('hidden');
-  rxActiveControls.classList.remove('hidden');
+  if (receiveCodeInput) receiveCodeInput.value = '';
+  if (receiverStepInput) receiverStepInput.classList.remove('hidden');
+  if (receiverStepTransfer) receiverStepTransfer.classList.add('hidden');
+  if (rxClearedBox) rxClearedBox.classList.add('hidden');
+  if (rxProgressBox) rxProgressBox.classList.remove('hidden');
+  if (rxActiveControls) rxActiveControls.classList.remove('hidden');
   if (rxPeerPill) rxPeerPill.classList.add('hidden');
   if (rxActivityList) rxActivityList.innerHTML = '';
+  if (rxRouteMode) {
+    rxRouteMode.textContent = 'Direct LAN';
+    rxRouteMode.className = 'stat-val stat-route mode-lan';
+  }
 }
 
 // Initial UI Setup

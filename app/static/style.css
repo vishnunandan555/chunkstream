@@ -498,7 +498,7 @@ body {
 
 .stats-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr 1fr;
+  grid-template-columns: repeat(4, 1fr);
   text-align: center;
   gap: 8px;
 }
@@ -507,6 +507,7 @@ body {
   display: flex;
   flex-direction: column;
   gap: 3px;
+  min-width: 0;
 }
 
 .stat-label {
@@ -522,6 +523,22 @@ body {
   font-size: 0.88rem;
   font-weight: 600;
   color: var(--text-main);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.stat-val.stat-route {
+  font-size: 0.72rem;
+  letter-spacing: -0.01em;
+}
+
+.stat-val.mode-lan {
+  color: var(--success);
+}
+
+.stat-val.mode-cloud {
+  color: #3b82f6;
 }
 
 .sub-stats-row {
@@ -685,20 +702,39 @@ body {
   display: none;
 }
 
-/* Transfer Activity Log Box */
-.activity-log-box {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
+/* Collapsible Connection & Transfer Developer Log */
+details.activity-log-box {
+  display: block;
   background: var(--bg-card-subtle, rgba(255, 255, 255, 0.02));
   border: 1px solid var(--border-color);
   border-radius: var(--radius-sm, 10px);
-  padding: 10px 12px;
+  padding: 0;
   width: 100%;
   text-align: left;
+  overflow: hidden;
+  transition: border-color var(--transition-fast), background var(--transition-fast);
 }
 
-.activity-log-header {
+details.activity-log-box[open] {
+  border-color: rgba(255, 255, 255, 0.15);
+  background: rgba(0, 0, 0, 0.15);
+}
+
+.log-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  cursor: pointer;
+  user-select: none;
+  list-style: none;
+}
+
+.log-summary::-webkit-details-marker {
+  display: none;
+}
+
+.log-summary-title {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -707,6 +743,23 @@ body {
   text-transform: uppercase;
   letter-spacing: 0.06em;
   color: var(--text-muted);
+}
+
+.log-summary-hint {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 0.68rem;
+  font-weight: 500;
+  color: var(--text-muted);
+}
+
+.log-summary-hint svg {
+  transition: transform 0.2s ease;
+}
+
+details.activity-log-box[open] .log-summary-hint svg {
+  transform: rotate(180deg);
 }
 
 .activity-indicator {
@@ -725,7 +778,7 @@ body {
 }
 
 .activity-log-list {
-  max-height: 82px;
+  max-height: 120px;
   min-height: 38px;
   overflow-y: auto;
   display: flex;
@@ -736,6 +789,8 @@ body {
   line-height: 1.45;
   color: var(--text-secondary);
   scrollbar-width: thin;
+  padding: 8px 12px 10px 12px;
+  border-top: 1px solid var(--border-color);
 }
 
 .log-item {
@@ -786,6 +841,10 @@ body {
   }
   .code-number {
     font-size: 2.1rem;
+  }
+  .stats-grid {
+    grid-template-columns: repeat(2, 1fr);
+    gap: 8px;
   }
   .btn {
     min-height: 44px;

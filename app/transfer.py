@@ -364,28 +364,29 @@ async def handle_websocket_message(websocket: WebSocket, raw_message: str) -> No
                 speed_mb,
             )
 
-        # ACK to sender immediately so sender pipeline advances
-        await manager.safe_send(
-            websocket,
-            json.dumps({"type": "chunk_ack", "index": chunk_index, "transfer_id": transfer_id})
+        # Forward chunk directly to receiver with flow-control (synchronous zero-buffering relay)
+        delivered = await manager.send_to_role(
+            transfer_id,
+            "receiver",
+            {
+                "type": "chunk_data",
+                "transfer_id": transfer_id,
+                "index": chunk_index,
+                "total": total_chunks,
+                "size": chunk_size,
+                "data": chunk_data_b64,
+                "hash": chunk_hash,
+            },
         )
 
-        # Forward chunk directly to receiver asynchronously so sender read loop NEVER blocks
-        asyncio.create_task(
-            manager.send_to_role(
-                transfer_id,
-                "receiver",
-                {
-                    "type": "chunk_data",
-                    "transfer_id": transfer_id,
-                    "index": chunk_index,
-                    "total": total_chunks,
-                    "size": chunk_size,
-                    "data": chunk_data_b64,
-                    "hash": chunk_hash,
-                },
+        if delivered:
+            # Acknowledge to sender that chunk was delivered directly to receiver
+            await manager.safe_send(
+                websocket,
+                json.dumps({"type": "chunk_ack", "index": chunk_index, "transfer_id": transfer_id}),
             )
-        )
+        else:
+            logger.warning("[%s] Chunk %d delivery failed: receiver disconnected", transfer_id, chunk_index)
         return
 
     # 7. Resume Request: receiver announces missing chunks to sender

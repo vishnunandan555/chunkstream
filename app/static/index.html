@@ -12,7 +12,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;600;700&display=swap" rel="stylesheet">
   
   <!-- Cache-busting stylesheet -->
-  <link rel="stylesheet" href="style.css?v=5.6.0">
+  <link rel="stylesheet" href="style.css?v=5.7.0">
 
   <!-- Core Inlines to guarantee instant centered layout and zero FOUC -->
   <style>
@@ -205,6 +205,10 @@
                   <span class="stat-label">ETA</span>
                   <span class="stat-val" id="sender-eta">--</span>
                 </div>
+                <div class="stat-item">
+                  <span class="stat-label">Route</span>
+                  <span class="stat-val stat-route" id="sender-route-mode">Direct LAN</span>
+                </div>
               </div>
               <div class="sub-stats-row">
                 <span id="sender-progress-bytes">0 B / 0 B</span>
@@ -219,14 +223,20 @@
               <button type="button" class="btn btn-danger" id="btn-cancel-send">Cancel</button>
             </div>
 
-            <!-- Live Activity Log -->
-            <div class="activity-log-box" id="sender-activity-box">
-              <div class="activity-log-header">
-                <span class="activity-indicator"></span>
-                <span>Transfer Activity</span>
-              </div>
+            <!-- Collapsible Connection & Transfer Log -->
+            <details class="activity-log-box details-log" id="sender-activity-box">
+              <summary class="log-summary">
+                <div class="log-summary-title">
+                  <span class="activity-indicator"></span>
+                  <span>Connection & Transfer Log</span>
+                </div>
+                <span class="log-summary-hint">
+                  <span>Trace</span>
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"></polyline></svg>
+                </span>
+              </summary>
               <div class="activity-log-list" id="sender-activity-list"></div>
-            </div>
+            </details>
 
             <button type="button" class="btn btn-secondary hidden" id="btn-send-again">Send Another File</button>
             <button type="button" class="btn-link" id="btn-back-from-send">
@@ -300,6 +310,10 @@
                   <span class="stat-label">ETA</span>
                   <span class="stat-val" id="rx-eta">--</span>
                 </div>
+                <div class="stat-item">
+                  <span class="stat-label">Route</span>
+                  <span class="stat-val stat-route" id="rx-route-mode">Direct LAN</span>
+                </div>
               </div>
               <div class="sub-stats-row">
                 <span id="rx-progress-bytes">0 B / 0 B</span>
@@ -312,14 +326,20 @@
               <button type="button" class="btn btn-danger" id="btn-cancel-receive">Cancel</button>
             </div>
 
-            <!-- Live Activity Log -->
-            <div class="activity-log-box" id="rx-activity-box">
-              <div class="activity-log-header">
-                <span class="activity-indicator"></span>
-                <span>Transfer Activity</span>
-              </div>
+            <!-- Collapsible Connection & Transfer Log -->
+            <details class="activity-log-box details-log" id="rx-activity-box">
+              <summary class="log-summary">
+                <div class="log-summary-title">
+                  <span class="activity-indicator"></span>
+                  <span>Connection & Transfer Log</span>
+                </div>
+                <span class="log-summary-hint">
+                  <span>Trace</span>
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"></polyline></svg>
+                </span>
+              </summary>
               <div class="activity-log-list" id="rx-activity-list"></div>
-            </div>
+            </details>
 
             <!-- Finished Box -->
             <div id="rx-cleared-box" class="hidden">
@@ -350,6 +370,6 @@
     </main>
   </div>
 
-  <script src="app.js?v=5.6.0"></script>
+  <script src="app.js?v=5.7.0"></script>
 </body>
 </html>
