@@ -258,6 +258,79 @@ body {
   font-size: 0.82rem;
 }
 
+/* Dynamic Transfer Mode Pill */
+.mode-pill {
+  display: inline-flex;
+  align-items: center;
+  align-self: center;
+  gap: 6px;
+  padding: 3px 10px;
+  border-radius: 20px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  background: var(--box-bg);
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  transition: all 0.2s ease;
+  margin: 0 auto;
+}
+
+.mode-pill-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #9ca3af;
+  display: inline-block;
+}
+
+.mode-pill.mode-detecting .mode-pill-dot {
+  background: #f59e0b;
+  animation: pulseDot 1s infinite alternate;
+}
+
+.mode-pill.mode-lan {
+  border-color: rgba(16, 185, 129, 0.4);
+  background: rgba(16, 185, 129, 0.1);
+  color: var(--success);
+}
+
+.mode-pill.mode-lan .mode-pill-dot {
+  background: var(--success);
+  box-shadow: 0 0 6px var(--success);
+}
+
+.mode-pill.mode-cloud {
+  border-color: rgba(37, 99, 235, 0.4);
+  background: rgba(37, 99, 235, 0.1);
+  color: var(--primary);
+}
+
+.mode-pill.mode-cloud .mode-pill-dot {
+  background: var(--primary);
+}
+
+@keyframes pulseDot {
+  0% { opacity: 0.4; }
+  100% { opacity: 1; }
+}
+
+/* Bypassed Cloud Relay in LAN mode */
+.hop-node.relay.bypassed .hop-icon {
+  border-color: var(--border);
+  color: var(--text-sub);
+  opacity: 0.6;
+  box-shadow: none;
+}
+
+.hop-node.relay.bypassed .hop-name {
+  color: var(--text-sub);
+}
+
+.hop-node.relay.bypassed .hop-sub {
+  color: var(--success);
+}
+
 /* Code Container */
 .code-container {
   background: var(--box-bg);

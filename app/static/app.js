@@ -205,6 +205,43 @@ let senderCellMap = [];
 let rxCellMap = [];
 let cachedNetInfo = null;
 
+// Dynamic Transfer Mode State (Direct LAN vs Cloud Relay)
+let peerConnection = null;
+let dataChannel = null;
+let transferMode = 'detecting'; // 'detecting' | 'lan' | 'cloud'
+let lanDetectionTimer = null;
+const rtcConfig = {
+  iceServers: [
+    { urls: 'stun:stun.l.google.com:19302' },
+  ],
+};
+
+function updateTransferModeUI(role, mode) {
+  transferMode = mode;
+  const pill = role === 'sender' ? document.getElementById('sender-mode-pill') : document.getElementById('rx-mode-pill');
+  const label = role === 'sender' ? document.getElementById('sender-mode-label') : document.getElementById('rx-mode-label');
+  const relayNode = role === 'sender' ? document.getElementById('sender-hop-relay') : document.getElementById('rx-hop-relay');
+  const relaySub = role === 'sender' ? document.getElementById('sender-relay-region') : document.getElementById('rx-relay-region');
+
+  if (!pill || !label) return;
+
+  pill.className = `mode-pill mode-${mode}`;
+  if (mode === 'lan') {
+    label.textContent = 'Direct LAN (P2P)';
+    if (relayNode) relayNode.classList.add('bypassed');
+    if (relaySub) relaySub.textContent = 'Bypassed (Direct LAN)';
+  } else if (mode === 'cloud') {
+    label.textContent = 'Cloud Relay (Zero Storage)';
+    if (relayNode) relayNode.classList.remove('bypassed');
+    if (relaySub && cachedNetInfo && cachedNetInfo.server_region) {
+      relaySub.textContent = cachedNetInfo.server_region;
+    }
+  } else {
+    label.textContent = 'Mode: Auto-Detecting...';
+    if (relayNode) relayNode.classList.remove('bypassed');
+  }
+}
+
 // Cookie-Based Device Identification ("device gets forgotten if cookie cleared")
 function getCookie(name) {
   const match = document.cookie.match(new RegExp('(^|;\\s*)(' + name + ')=([^;]*)'));
@@ -643,6 +680,183 @@ btnCopyCode.addEventListener('click', () => {
   });
 });
 
+// WebRTC Direct LAN Implementation
+async function initSenderWebRTC() {
+  if (peerConnection) {
+    try { peerConnection.close(); } catch (_) {}
+  }
+
+  try {
+    peerConnection = new RTCPeerConnection(rtcConfig);
+
+    peerConnection.onicecandidate = (event) => {
+      if (event.candidate && senderWs && senderWs.readyState === WebSocket.OPEN) {
+        senderWs.send(JSON.stringify({
+          type: 'signal_candidate',
+          candidate: event.candidate,
+        }));
+      }
+    };
+
+    dataChannel = peerConnection.createDataChannel('chunkstream-lane', {
+      ordered: true,
+    });
+    dataChannel.binaryType = 'arraybuffer';
+    dataChannel.bufferedAmountLowThreshold = 512 * 1024;
+
+    dataChannel.onopen = () => {
+      if (lanDetectionTimer) {
+        clearTimeout(lanDetectionTimer);
+        lanDetectionTimer = null;
+      }
+      updateTransferModeUI('sender', 'lan');
+      if (!isPaused && !isStreaming) {
+        startStreamingChunks();
+      }
+    };
+
+    dataChannel.onmessage = (e) => {
+      try {
+        const msg = JSON.parse(e.data);
+        if (msg.type === 'rx_ack') {
+          handleChunkAck(msg.index);
+        }
+      } catch (_) {}
+    };
+
+    dataChannel.onerror = () => fallbackToCloudRelay('sender');
+    dataChannel.onclose = () => {
+      if (isStreaming && transferMode === 'lan') {
+        fallbackToCloudRelay('sender');
+      }
+    };
+
+    const offer = await peerConnection.createOffer();
+    await peerConnection.setLocalDescription(offer);
+
+    if (senderWs && senderWs.readyState === WebSocket.OPEN) {
+      senderWs.send(JSON.stringify({
+        type: 'signal_offer',
+        sdp: offer.sdp,
+      }));
+    }
+  } catch (err) {
+    console.warn('WebRTC init error, falling back to cloud relay:', err);
+    fallbackToCloudRelay('sender');
+  }
+}
+
+function fallbackToCloudRelay(role) {
+  if (transferMode === 'lan' && dataChannel && dataChannel.readyState === 'open') return;
+  if (lanDetectionTimer) {
+    clearTimeout(lanDetectionTimer);
+    lanDetectionTimer = null;
+  }
+  updateTransferModeUI(role, 'cloud');
+  if (role === 'sender' && !isPaused && !isStreaming) {
+    startStreamingChunks();
+  }
+}
+
+async function handleReceiverSignalOffer(sdp, transferData) {
+  if (peerConnection) {
+    try { peerConnection.close(); } catch (_) {}
+  }
+
+  try {
+    peerConnection = new RTCPeerConnection(rtcConfig);
+
+    peerConnection.onicecandidate = (event) => {
+      if (event.candidate && receiverWs && receiverWs.readyState === WebSocket.OPEN) {
+        receiverWs.send(JSON.stringify({
+          type: 'signal_candidate',
+          candidate: event.candidate,
+        }));
+      }
+    };
+
+    peerConnection.ondatachannel = (event) => {
+      dataChannel = event.channel;
+      dataChannel.binaryType = 'arraybuffer';
+      dataChannel.onopen = () => {
+        updateTransferModeUI('rx', 'lan');
+      };
+      dataChannel.onmessage = async (e) => {
+        try {
+          const msg = JSON.parse(e.data);
+          if (msg.type === 'chunk') {
+            if (dataChannel && dataChannel.readyState === 'open') {
+              dataChannel.send(JSON.stringify({ type: 'rx_ack', index: msg.index }));
+            }
+            await processReceivedChunk(msg.index, msg.data, transferData);
+          }
+        } catch (err) {
+          console.warn('Error handling LAN chunk:', err);
+        }
+      };
+    };
+
+    await peerConnection.setRemoteDescription(new RTCSessionDescription({ type: 'offer', sdp }));
+    const answer = await peerConnection.createAnswer();
+    await peerConnection.setLocalDescription(answer);
+
+    if (receiverWs && receiverWs.readyState === WebSocket.OPEN) {
+      receiverWs.send(JSON.stringify({
+        type: 'signal_answer',
+        sdp: answer.sdp,
+      }));
+    }
+  } catch (err) {
+    console.warn('Error handling signal offer on receiver:', err);
+    updateTransferModeUI('rx', 'cloud');
+  }
+}
+
+async function processReceivedChunk(index, b64Data, transferData) {
+  if (rxReceivedIndices.has(index)) return;
+
+  const chunkBytes = base64ToUint8Array(b64Data);
+
+  // Stream chunk directly to disk without storing in memory
+  if (rxWritableStream) {
+    await rxWritableStream.write({
+      type: 'write',
+      position: index * transferData.chunk_size,
+      data: chunkBytes,
+    });
+  } else {
+    rxChunksMap.set(index, chunkBytes);
+  }
+
+  rxReceivedIndices.add(index);
+  rxBytesReceived += chunkBytes.length;
+  setChunkState('rx', index, 'acked', transferData.total_chunks);
+
+  const total = transferData.total_chunks;
+  const pct = Math.round((rxReceivedIndices.size / total) * 100);
+  rxProgressFill.style.width = `${pct}%`;
+  rxProgressPct.textContent = `${pct}%`;
+
+  const elapsedSec = (Date.now() - rxStartTime) / 1000;
+  if (elapsedSec > 0.2) {
+    const speedBytesPerSec = rxBytesReceived / elapsedSec;
+    const mbps = (speedBytesPerSec / (1024 * 1024)).toFixed(1);
+    rxSpeed.textContent = `${mbps} MB/s`;
+    recordSpeedSample('rx', parseFloat(mbps));
+
+    const remainingBytes = transferData.filesize - rxBytesReceived;
+    const etaSec = speedBytesPerSec > 0 ? remainingBytes / speedBytesPerSec : 0;
+    rxEta.textContent = formatDuration(etaSec);
+  }
+
+  rxProgressBytes.textContent = `${formatBytes(rxBytesReceived)} / ${formatBytes(transferData.filesize)}`;
+  rxProgressChunks.textContent = `Chunk ${rxReceivedIndices.size}/${total}`;
+
+  if (rxReceivedIndices.size === total) {
+    completeReceiverFile(transferData.filename, transferData.mime_type);
+  }
+}
+
 async function handleFileSelected(file) {
   if (!file || file.size <= 0) {
     alert('Please select a valid non-empty file.');
@@ -658,6 +872,7 @@ async function handleFileSelected(file) {
   bytesSent = 0;
   isStreaming = false;
   isPaused = false;
+  transferMode = 'detecting';
 
   sendFileName.textContent = file.name;
   sendFileSize.textContent = formatBytes(file.size);
@@ -673,7 +888,8 @@ async function handleFileSelected(file) {
   btnPauseSend.classList.remove('hidden');
   btnResumeSend.classList.add('hidden');
 
-  // Initialize Telemetry
+  // Initialize Telemetry & Transfer Mode
+  updateTransferModeUI('sender', 'detecting');
   initChunkMatrix('sender', totalChunks);
   setupLocalDeviceCard('sender');
   resetSparkline('sender');
@@ -710,12 +926,35 @@ function connectSenderWebSocket() {
     sendPeerInfo('sender', senderWs);
   };
 
-  senderWs.onmessage = (e) => {
+  senderWs.onmessage = async (e) => {
     try {
       const msg = JSON.parse(e.data);
       if (msg.type === 'peer_connected' && msg.role === 'receiver') {
         sendPeerInfo('sender', senderWs);
-        if (!isPaused) startStreamingChunks();
+        // Start 3-second LAN connection race!
+        if (transferMode === 'detecting' && !lanDetectionTimer) {
+          initSenderWebRTC();
+          lanDetectionTimer = setTimeout(() => {
+            if (transferMode !== 'lan') {
+              fallbackToCloudRelay('sender');
+            }
+          }, 3000);
+        }
+      } else if (msg.type === 'signal_answer') {
+        if (peerConnection) {
+          try {
+            await peerConnection.setRemoteDescription(new RTCSessionDescription({ type: 'answer', sdp: msg.sdp }));
+          } catch (err) {
+            console.warn('Error setting remote answer:', err);
+            fallbackToCloudRelay('sender');
+          }
+        }
+      } else if (msg.type === 'signal_candidate') {
+        if (peerConnection && msg.candidate) {
+          try {
+            await peerConnection.addIceCandidate(new RTCIceCandidate(msg.candidate));
+          } catch (_) {}
+        }
       } else if (msg.type === 'peer_info') {
         if (msg.role === 'receiver') {
           handlePeerInfo('sender', msg);
@@ -809,17 +1048,31 @@ async function streamFileChunks(missingList) {
     const buffer = await slice.arrayBuffer();
     const b64 = arrayBufferToBase64(buffer);
 
-    if (senderWs && senderWs.readyState === WebSocket.OPEN) {
-      senderWs.send(JSON.stringify({
-        type: 'chunk',
-        index: idx,
-        total: totalChunks,
-        size: buffer.byteLength,
-        data: b64,
-      }));
+    const chunkPayload = JSON.stringify({
+      type: 'chunk',
+      index: idx,
+      total: totalChunks,
+      size: buffer.byteLength,
+      data: b64,
+    });
+
+    if (transferMode === 'lan' && dataChannel && dataChannel.readyState === 'open') {
+      // Direct LAN stream (zero server bandwidth)
+      dataChannel.send(chunkPayload);
+      if (dataChannel.bufferedAmount > 1024 * 1024) {
+        await new Promise(resolve => {
+          dataChannel.onbufferedamountlow = () => {
+            dataChannel.onbufferedamountlow = null;
+            resolve();
+          };
+        });
+      }
+    } else if (senderWs && senderWs.readyState === WebSocket.OPEN) {
+      // Cloud Relay stream
+      senderWs.send(chunkPayload);
     }
 
-    await new Promise(r => setTimeout(r, 5));
+    await new Promise(r => setTimeout(r, 2));
   }
 }
 
@@ -856,6 +1109,9 @@ function handleChunkAck(index) {
     btnSendAgain.classList.remove('hidden');
     if (senderWs && senderWs.readyState === WebSocket.OPEN) {
       senderWs.send(JSON.stringify({ type: 'complete' }));
+    }
+    if (dataChannel && dataChannel.readyState === 'open') {
+      try { dataChannel.send(JSON.stringify({ type: 'complete' })); } catch (_) {}
     }
   }
 }
@@ -953,6 +1209,20 @@ function resetSender() {
   stopRttPing('sender');
   resetChunkMatrix('sender');
   resetSparkline('sender');
+  if (lanDetectionTimer) {
+    clearTimeout(lanDetectionTimer);
+    lanDetectionTimer = null;
+  }
+  if (dataChannel) {
+    try { dataChannel.close(); } catch (_) {}
+    dataChannel = null;
+  }
+  if (peerConnection) {
+    try { peerConnection.close(); } catch (_) {}
+    peerConnection = null;
+  }
+  transferMode = 'detecting';
+  updateTransferModeUI('sender', 'detecting');
   senderStepPick.classList.remove('hidden');
   senderStepTransfer.classList.add('hidden');
   senderActiveControls.classList.add('hidden');
@@ -1017,6 +1287,8 @@ async function startReceiving() {
 
     rxStartTime = Date.now();
     rxBytesReceived = 0;
+    transferMode = 'detecting';
+    updateTransferModeUI('rx', 'detecting');
 
     // Initialize Receiver Telemetry
     initChunkMatrix('rx', data.total_chunks);
@@ -1032,8 +1304,6 @@ async function startReceiving() {
 function connectReceiverWebSocket(code, transferData) {
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
   receiverWs = new WebSocket(`${protocol}//${window.location.host}/ws/transfer/${code}?role=receiver`);
-
-  const total = transferData.total_chunks;
 
   receiverWs.onopen = () => {
     startRttPing('rx', receiverWs);
@@ -1051,6 +1321,14 @@ function connectReceiverWebSocket(code, transferData) {
         rxStatusDot.className = 'status-dot green';
         rxStatusText.textContent = 'Receiving stream...';
         sendPeerInfo('rx', receiverWs);
+      } else if (msg.type === 'signal_offer') {
+        await handleReceiverSignalOffer(msg.sdp, transferData);
+      } else if (msg.type === 'signal_candidate') {
+        if (peerConnection && msg.candidate) {
+          try {
+            await peerConnection.addIceCandidate(new RTCIceCandidate(msg.candidate));
+          } catch (_) {}
+        }
       } else if (msg.type === 'peer_info') {
         if (msg.role === 'sender') {
           handlePeerInfo('rx', msg);
@@ -1076,50 +1354,11 @@ function connectReceiverWebSocket(code, transferData) {
           rxWritableStream = null;
         }
       } else if (msg.type === 'chunk_data') {
-        // Send ACK back
+        // Send ACK back over WebSocket relay
         if (receiverWs && receiverWs.readyState === WebSocket.OPEN) {
           receiverWs.send(JSON.stringify({ type: 'rx_ack', index: msg.index }));
         }
-
-        const chunkBytes = base64ToUint8Array(msg.data);
-
-        // Stream chunk directly to disk without storing in memory
-        if (rxWritableStream) {
-          await rxWritableStream.write({
-            type: 'write',
-            position: msg.index * transferData.chunk_size,
-            data: chunkBytes,
-          });
-        } else {
-          rxChunksMap.set(msg.index, chunkBytes);
-        }
-
-        rxReceivedIndices.add(msg.index);
-        rxBytesReceived += chunkBytes.length;
-        setChunkState('rx', msg.index, 'acked', total);
-
-        const pct = Math.round((rxReceivedIndices.size / total) * 100);
-        rxProgressFill.style.width = `${pct}%`;
-        rxProgressPct.textContent = `${pct}%`;
-
-        const elapsedSec = (Date.now() - rxStartTime) / 1000;
-        if (elapsedSec > 0.2) {
-          const speedBytesPerSec = rxBytesReceived / elapsedSec;
-          const mbps = (speedBytesPerSec / (1024 * 1024)).toFixed(1);
-          rxSpeed.textContent = `${mbps} MB/s`;
-          recordSpeedSample('rx', parseFloat(mbps));
-
-          const remainingBytes = transferData.filesize - rxBytesReceived;
-          const etaSec = speedBytesPerSec > 0 ? remainingBytes / speedBytesPerSec : 0;
-          rxEta.textContent = formatDuration(etaSec);
-        }
-
-        rxProgressBytes.textContent = `${formatBytes(rxBytesReceived)} / ${formatBytes(transferData.filesize)}`;
-        rxProgressChunks.textContent = `Chunk ${rxReceivedIndices.size}/${total}`;
-
-        if (rxReceivedIndices.size === total) {
-          completeReceiverFile(transferData.filename, transferData.mime_type);
-        }
+        await processReceivedChunk(msg.index, msg.data, transferData);
       } else if (msg.type === 'completed') {
         completeReceiverFile(transferData.filename, transferData.mime_type);
       }
@@ -1206,6 +1445,16 @@ function resetReceiver() {
   stopRttPing('rx');
   resetChunkMatrix('rx');
   resetSparkline('rx');
+  if (dataChannel) {
+    try { dataChannel.close(); } catch (_) {}
+    dataChannel = null;
+  }
+  if (peerConnection) {
+    try { peerConnection.close(); } catch (_) {}
+    peerConnection = null;
+  }
+  transferMode = 'detecting';
+  updateTransferModeUI('rx', 'detecting');
   receiveCodeInput.value = '';
   receiverStepInput.classList.remove('hidden');
   receiverStepTransfer.classList.add('hidden');

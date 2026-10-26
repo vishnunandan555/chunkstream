@@ -220,6 +220,12 @@ async def handle_websocket_message(websocket: WebSocket, raw_message: str) -> No
         await manager.send_to_role(transfer_id, "sender", data)
         return
 
+    # 4. WebRTC Direct LAN Signaling (Offer, Answer, ICE Candidates)
+    if msg_type in ("signal_offer", "signal_answer", "signal_candidate"):
+        target_role = "receiver" if role == "sender" else "sender"
+        await manager.send_to_role(transfer_id, target_role, data)
+        return
+
     # 3. Pause Transfer
     if msg_type == "pause":
         update_transfer_status(transfer_id, "paused")

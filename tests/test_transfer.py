@@ -300,3 +300,50 @@ def test_peer_info_and_rtt_ping_websocket():
             assert rx_peer_msg["role"] == "sender"
             assert rx_peer_msg["device_id"] == "ABC123"
 
+
+def test_webrtc_signaling_relay():
+    """Validates WebRTC signal_offer, signal_answer, and signal_candidate forwarding."""
+    transfer_id = "PROD-WEBRTC-SIGNAL"
+    create_transfer(
+        transfer_id=transfer_id,
+        filename="p2p_signal.dat",
+        filesize=1000,
+        chunk_size=500,
+        total_chunks=2,
+    )
+
+    with client.websocket_connect(f"/ws/transfer/{transfer_id}?role=receiver") as rx_ws:
+        _ = rx_ws.receive_json()
+
+        with client.websocket_connect(f"/ws/transfer/{transfer_id}?role=sender") as sender_ws:
+            _ = sender_ws.receive_json()
+            _ = rx_ws.receive_json()
+
+            # 1. Sender sends signal_offer
+            sender_ws.send_json({
+                "type": "signal_offer",
+                "sdp": "v=0\r\no=sender 123 456 IN IP4 127.0.0.1\r\ns=ChunkStream\r\n",
+            })
+            offer_msg = rx_ws.receive_json()
+            assert offer_msg["type"] == "signal_offer"
+            assert "sender" in offer_msg["sdp"]
+
+            # 2. Receiver sends signal_answer
+            rx_ws.send_json({
+                "type": "signal_answer",
+                "sdp": "v=0\r\no=receiver 789 012 IN IP4 127.0.0.1\r\ns=ChunkStream\r\n",
+            })
+            answer_msg = sender_ws.receive_json()
+            assert answer_msg["type"] == "signal_answer"
+            assert "receiver" in answer_msg["sdp"]
+
+            # 3. Candidate relay from sender to receiver
+            sender_ws.send_json({
+                "type": "signal_candidate",
+                "candidate": {"candidate": "candidate:1 1 UDP 2122260223 192.168.1.100 50000 typ host"},
+            })
+            cand_msg = rx_ws.receive_json()
+            assert cand_msg["type"] == "signal_candidate"
+            assert "192.168.1.100" in cand_msg["candidate"]["candidate"]
+
+
