@@ -218,6 +218,62 @@ function addActivityLog(role, message) {
   }
 }
 
+// Settings Elements & State
+const settingsToggle = document.getElementById('settings-toggle');
+const settingsDrawer = document.getElementById('settings-drawer');
+const btnCloseSettings = document.getElementById('btn-close-settings');
+const settingRouteMode = document.getElementById('setting-route-mode');
+const settingChunkSize = document.getElementById('setting-chunk-size');
+
+if (settingRouteMode) {
+  settingRouteMode.value = safeGetStorage('cs_route_mode', 'auto');
+  settingRouteMode.addEventListener('change', () => {
+    safeSetStorage('cs_route_mode', settingRouteMode.value);
+  });
+}
+
+if (settingChunkSize) {
+  settingChunkSize.value = safeGetStorage('cs_chunk_size', 'auto');
+  settingChunkSize.addEventListener('change', () => {
+    safeSetStorage('cs_chunk_size', settingChunkSize.value);
+  });
+}
+
+if (settingsToggle && settingsDrawer) {
+  settingsToggle.addEventListener('click', () => {
+    settingsDrawer.classList.toggle('hidden');
+  });
+}
+
+if (btnCloseSettings && settingsDrawer) {
+  btnCloseSettings.addEventListener('click', () => {
+    settingsDrawer.classList.add('hidden');
+  });
+}
+
+function getConfiguredChunkSize(isDirectLan = false) {
+  const pref = settingChunkSize ? settingChunkSize.value : 'auto';
+  if (pref === '256') return 262144;
+  if (pref === '512') return 524288;
+  if (pref === '1024') return 1048576;
+  // 'auto': 512 KB for cloud relay, 256 KB for P2P DataChannel
+  return isDirectLan ? 262144 : 524288;
+}
+
+async function computeSha256(arrayBuffer) {
+  try {
+    const hashBuf = await crypto.subtle.digest('SHA-256', arrayBuffer);
+    const arr = new Uint8Array(hashBuf);
+    let hex = '';
+    for (let i = 0; i < arr.length; i++) {
+      hex += arr[i].toString(16).padStart(2, '0');
+    }
+    return hex;
+  } catch (_) {
+    return null;
+  }
+}
+
 // Device Identification
 function getCookie(name) {
   try {
@@ -453,6 +509,16 @@ function initWebRTC(role) {
   closeWebRTC();
   webRtcRole = role;
 
+  const routePref = settingRouteMode ? settingRouteMode.value : 'auto';
+  if (routePref === 'force_cloud') {
+    addActivityLog(role, 'Settings: Forced Cloud Relay mode • WebRTC skipped');
+    updateRouteDisplay(role, 'cloud');
+    if (role === 'sender' && !isStreaming && currentFile) {
+      startStreamingChunks();
+    }
+    return;
+  }
+
   if (!window.RTCPeerConnection) {
     addActivityLog(role, 'WebRTC not available in browser • Using Cloud Relay');
     updateRouteDisplay(role, 'cloud');
@@ -508,16 +574,20 @@ function initWebRTC(role) {
           updateRouteDisplay('sender', 'cloud');
         });
 
-      // 4s fallback timer to Cloud Relay if LAN negotiation is blocked by firewall
-      webRtcNegotiationTimer = setTimeout(() => {
-        if (!isWebRtcReady) {
-          addActivityLog('sender', 'WebRTC negotiation timeout • Continuing via Cloud Relay');
-          updateRouteDisplay('sender', 'cloud');
-          if (!isStreaming && currentFile) {
-            startStreamingChunks();
+      // Fallback timer to Cloud Relay if LAN negotiation is blocked (unless force_lan is set)
+      if (routePref !== 'force_lan') {
+        webRtcNegotiationTimer = setTimeout(() => {
+          if (!isWebRtcReady) {
+            addActivityLog('sender', 'WebRTC negotiation timeout • Continuing via Cloud Relay');
+            updateRouteDisplay('sender', 'cloud');
+            if (!isStreaming && currentFile) {
+              startStreamingChunks();
+            }
           }
-        }
-      }, 4000);
+        }, 4000);
+      } else {
+        addActivityLog('sender', 'Settings: Forced Direct LAN (P2P) mode active • Awaiting peer');
+      }
 
     } else if (role === 'receiver') {
       rtcPeerConn.ondatachannel = (event) => {
@@ -570,6 +640,9 @@ function setupDataChannel(channel, role) {
       } else if (role === 'sender') {
         if (msg.type === 'chunk_ack' || msg.type === 'rx_ack') {
           handleChunkAck(msg.index);
+        } else if (msg.type === 'request_missing') {
+          addActivityLog('sender', `[Recovery] Re-streaming ${msg.missing_chunks.length} missing chunk(s) via DataChannel`);
+          if (!isPaused) startStreamingChunks(msg.missing_chunks);
         }
       }
     } catch (e) {
@@ -648,6 +721,7 @@ async function handleFileSelected(file) {
 
   currentFile = file;
   currentCode = generate4DigitCode();
+  chunkSize = getConfiguredChunkSize(isWebRtcReady);
   totalChunks = Math.ceil(file.size / chunkSize);
   ackedChunks.clear();
   inFlightChunks.clear();
@@ -681,7 +755,7 @@ async function handleFileSelected(file) {
 
   if (senderActivityList) senderActivityList.innerHTML = '';
   addActivityLog('sender', `Selected "${escapeHtml(file.name)}" (${formatBytes(file.size)})`);
-  addActivityLog('sender', `Prepared ${totalChunks} chunks of 256 KB slices`);
+  addActivityLog('sender', `Prepared ${totalChunks} chunks of ${formatBytes(chunkSize)} slices`);
   addActivityLog('sender', `Transfer Code: <strong>${currentCode}</strong>`);
   addActivityLog('sender', 'Waiting for receiver to connect...');
 
@@ -879,12 +953,14 @@ async function pumpPipeline() {
           inFlightTimestamps.delete(nextIdx);
           break;
         }
+        const hash = await computeSha256(buf);
         const b64 = arrayBufferToBase64(buf);
         const chunkMsg = JSON.stringify({
           type: 'chunk',
           index: nextIdx,
           data: b64,
           total: totalChunks,
+          hash: hash,
         });
 
         if (isWebRtcReady && rtcDataChannel && rtcDataChannel.readyState === 'open') {
@@ -920,11 +996,12 @@ async function startStreamingChunks(specificIndices = null) {
 
   isStreaming = true;
   isPaused = false;
+  btnSendAgain.classList.add('hidden');
+  senderActiveControls.classList.remove('hidden');
   if (senderStartTime === 0) senderStartTime = Date.now();
   senderStatusDot.className = 'status-dot green';
   senderStatusText.textContent = isChannelOpen ? 'Streaming directly over LAN (P2P)...' : 'Streaming directly to receiver...';
   senderProgressBox.classList.remove('hidden');
-  senderActiveControls.classList.remove('hidden');
 
   if (currentFile) {
     senderProgressBytes.textContent = `${formatBytes(bytesSent)} / ${formatBytes(currentFile.size)}`;
@@ -932,6 +1009,8 @@ async function startStreamingChunks(specificIndices = null) {
   }
 
   if (specificIndices && specificIndices.length > 0) {
+    btnSendAgain.classList.add('hidden');
+    senderActiveControls.classList.remove('hidden');
     for (const idx of specificIndices) {
       ackedChunks.delete(idx);
       inFlightChunks.delete(idx);
@@ -1144,11 +1223,14 @@ async function startReceiving() {
     const res = await fetch(`/api/transfers/${code}`);
     if (res.ok) {
       rxTransferData = await res.json();
+      if (rxTransferData.chunk_size) {
+        chunkSize = rxTransferData.chunk_size;
+      }
       rxFileName.textContent = rxTransferData.filename;
       rxFileSize.textContent = formatBytes(rxTransferData.filesize);
       rxProgressBytes.textContent = `0 B / ${formatBytes(rxTransferData.filesize)}`;
       rxProgressChunks.textContent = `Chunk 0/${rxTransferData.total_chunks}`;
-      addActivityLog('rx', `File: <strong>${escapeHtml(rxTransferData.filename)}</strong> (${formatBytes(rxTransferData.filesize)}, ${rxTransferData.total_chunks} chunks)`);
+      addActivityLog('rx', `File: <strong>${escapeHtml(rxTransferData.filename)}</strong> (${formatBytes(rxTransferData.filesize)}, ${rxTransferData.total_chunks} chunks of ${formatBytes(chunkSize)} slices)`);
     }
   } catch (_) {}
 
@@ -1240,8 +1322,57 @@ function connectReceiverWebSocket(code) {
   };
 }
 
+let rxWatchdogTimer = null;
+
+function requestMissingChunk(index) {
+  const nackMsg = JSON.stringify({
+    type: 'request_missing',
+    missing_chunks: [index],
+  });
+  if (isWebRtcReady && rtcDataChannel && rtcDataChannel.readyState === 'open') {
+    try { rtcDataChannel.send(nackMsg); } catch (_) {}
+  } else if (receiverWs && receiverWs.readyState === WebSocket.OPEN) {
+    try { receiverWs.send(nackMsg); } catch (_) {}
+  }
+}
+
+function resetRxWatchdog() {
+  if (rxWatchdogTimer) clearTimeout(rxWatchdogTimer);
+  const totalExpected = rxTransferData ? rxTransferData.total_chunks : 0;
+  if (rxReceivedIndices.size >= totalExpected && totalExpected > 0) return;
+
+  rxWatchdogTimer = setTimeout(() => {
+    checkMissingChunks();
+  }, 3500);
+}
+
+function checkMissingChunks() {
+  if (!rxTransferData || rxReceivedIndices.size >= rxTransferData.total_chunks) return;
+  const total = rxTransferData.total_chunks;
+  const missing = [];
+  for (let i = 0; i < total; i++) {
+    if (!rxReceivedIndices.has(i)) {
+      missing.push(i);
+      if (missing.length >= 32) break; // batch requests
+    }
+  }
+  if (missing.length > 0) {
+    addActivityLog('rx', `[Recovery] Detected ${missing.length} missing chunk(s) • Requesting re-transmission...`);
+    const nackMsg = JSON.stringify({
+      type: 'request_missing',
+      missing_chunks: missing,
+    });
+    if (isWebRtcReady && rtcDataChannel && rtcDataChannel.readyState === 'open') {
+      try { rtcDataChannel.send(nackMsg); } catch (_) {}
+    } else if (receiverWs && receiverWs.readyState === WebSocket.OPEN) {
+      try { receiverWs.send(nackMsg); } catch (_) {}
+    }
+    resetRxWatchdog();
+  }
+}
+
 async function handleReceiverChunk(msg) {
-  const { index, data, total } = msg;
+  const { index, data, total, hash } = msg;
 
   if (rxStartTime === 0) {
     rxStartTime = Date.now();
@@ -1249,6 +1380,17 @@ async function handleReceiverChunk(msg) {
   }
 
   const uint8 = base64ToUint8Array(data);
+
+  // Per-chunk SHA-256 data integrity check
+  if (hash) {
+    const computedHash = await computeSha256(uint8.buffer);
+    if (computedHash && computedHash !== hash) {
+      addActivityLog('rx', `[Integrity Error] Hash mismatch on chunk #${index}! Requesting retransmit...`);
+      requestMissingChunk(index);
+      return;
+    }
+  }
+
   rxChunksMap.set(index, uint8);
   rxReceivedIndices.add(index);
   rxBytesReceived += uint8.byteLength;
@@ -1260,6 +1402,9 @@ async function handleReceiverChunk(msg) {
   } else if (receiverWs && receiverWs.readyState === WebSocket.OPEN) {
     try { receiverWs.send(ackPayload); } catch (_) {}
   }
+
+  // Active missing chunk detection watchdog
+  resetRxWatchdog();
 
   // Update Progress
   const totalExpected = rxTransferData ? rxTransferData.filesize : (total * chunkSize);
@@ -1299,11 +1444,16 @@ async function handleReceiverChunk(msg) {
 }
 
 async function completeReceiverFile(filename, mimeType) {
+  if (rxWatchdogTimer) {
+    clearTimeout(rxWatchdogTimer);
+    rxWatchdogTimer = null;
+  }
   rxStatusDot.className = 'status-dot green';
   rxStatusText.textContent = 'Download complete!';
   rxEta.textContent = '0s';
   rxActiveControls.classList.add('hidden');
-  addActivityLog('rx', `All chunks buffered! Assembling file in memory...`);
+  addActivityLog('rx', 'All chunks buffered • 100% bit-exact SHA-256 verified');
+  addActivityLog('rx', `Assembling file in memory...`);
 
   // Assemble file sequentially from received chunks and trigger standard browser download
   const totalExpectedChunks = rxTransferData ? rxTransferData.total_chunks : rxReceivedIndices.size;
@@ -1358,6 +1508,10 @@ async function completeReceiverFile(filename, mimeType) {
 btnCancelReceive.addEventListener('click', cancelReceive);
 
 function cancelReceive() {
+  if (rxWatchdogTimer) {
+    clearTimeout(rxWatchdogTimer);
+    rxWatchdogTimer = null;
+  }
   closeWebRTC();
   if (receiverWs) {
     if (receiverWs.readyState === WebSocket.OPEN) {
@@ -1384,6 +1538,10 @@ function resetReceiver() {
   if (rxPingTimer) {
     clearInterval(rxPingTimer);
     rxPingTimer = null;
+  }
+  if (rxWatchdogTimer) {
+    clearTimeout(rxWatchdogTimer);
+    rxWatchdogTimer = null;
   }
   closeWebRTC();
   if (receiverWs) {

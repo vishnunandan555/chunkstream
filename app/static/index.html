@@ -12,7 +12,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;600;700&display=swap" rel="stylesheet">
   
   <!-- Cache-busting stylesheet -->
-  <link rel="stylesheet" href="style.css?v=5.7.0">
+  <link rel="stylesheet" href="style.css?v=5.8.0">
 
   <!-- Core Inlines to guarantee instant centered layout and zero FOUC -->
   <style>
@@ -84,11 +84,70 @@
             <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
           </svg>
         </button>
+
+        <!-- Transfer Settings Toggle -->
+        <button type="button" class="theme-btn" id="settings-toggle" title="Transfer Settings" aria-label="Transfer Settings">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="3"></circle>
+            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+          </svg>
+        </button>
       </div>
     </header>
 
     <!-- Main Card Frame -->
     <main class="app-main">
+      <!-- Expandable Settings Drawer -->
+      <div class="settings-drawer hidden" id="settings-drawer">
+        <div class="settings-header">
+          <div class="settings-title">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="12" cy="12" r="3"></circle>
+              <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+            </svg>
+            <span>Transfer & Engine Settings</span>
+          </div>
+          <button type="button" class="btn-close-settings" id="btn-close-settings" aria-label="Close settings">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+          </button>
+        </div>
+
+        <div class="settings-content">
+          <div class="setting-row">
+            <div class="setting-info">
+              <span class="setting-name">Transmission Route</span>
+              <span class="setting-desc">Auto-negotiate LAN P2P or force for testing</span>
+            </div>
+            <select class="setting-select" id="setting-route-mode">
+              <option value="auto">Auto (Direct LAN + Fallback)</option>
+              <option value="force_lan">Force Direct LAN (P2P)</option>
+              <option value="force_cloud">Force Cloud Relay (Zero-Storage)</option>
+            </select>
+          </div>
+
+          <div class="setting-row">
+            <div class="setting-info">
+              <span class="setting-name">Chunk Slice Size</span>
+              <span class="setting-desc">512 KB default for relay, 256 KB for P2P</span>
+            </div>
+            <select class="setting-select" id="setting-chunk-size">
+              <option value="auto">Auto (512 KB Cloud / 256 KB P2P)</option>
+              <option value="256">256 KB (P2P Standard)</option>
+              <option value="512">512 KB (High Throughput)</option>
+              <option value="1024">1024 KB (1 MB Gigafast)</option>
+            </select>
+          </div>
+
+          <div class="setting-row">
+            <div class="setting-info">
+              <span class="setting-name">Data Integrity & Recovery</span>
+              <span class="setting-desc">Per-chunk SHA-256 checksums & NACK recovery</span>
+            </div>
+            <span class="setting-status-badge">Active (SHA-256)</span>
+          </div>
+        </div>
+      </div>
+
       <div class="card main-card">
         <!-- Segmented Tab Switcher (Send / Receive) -->
         <div class="segmented-control" id="main-segmented-control">
@@ -370,6 +429,6 @@
     </main>
   </div>
 
-  <script src="app.js?v=5.7.0"></script>
+  <script src="app.js?v=5.8.0"></script>
 </body>
 </html>

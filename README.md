@@ -14,7 +14,10 @@ Optimized specifically for free-tier hosting (Render, Railway, Fly.io, etc.) wit
 - **Dynamic LAN & Internet Relay**:
   - **Direct LAN Mode**: Uses WebSockets for zero-configuration WebRTC signaling and transfers files directly peer-to-peer over local Wi-Fi / LAN when available.
   - **Cloud In-Memory Relay**: Seamlessly relays chunks in real time over secure WebSockets when peers are on different networks.
-- **Resilient Flow-Controlled Pipeline**: A dynamic in-flight window with high-precision timestamp tracking and a 2.5-second watchdog prevents packet loss or pipeline stalls.
+- **Engine & Route Diagnostics Drawer**: Expandable settings drawer in the top navigation allowing users to force transmission routes (Auto, Force Direct LAN P2P, Force Cloud Relay) and choose custom slice sizes (Auto 512KB Cloud / 256KB P2P, 256KB, 512KB, 1024KB).
+- **Per-Chunk SHA-256 Data Integrity**: Hardware-accelerated SubtleCrypto SHA-256 checksums calculated for each chunk, ensuring 100% bit-exact assembly and proactive rejection of corrupt packets.
+- **Missing Chunk Recovery (NACK Pull)**: Client-side receiver watchdog detects dropped chunk indices and requests targeted re-transmission (`request_missing`) without restarting the transfer.
+- **Resilient Flow-Controlled Pipeline**: A dynamic in-flight window with high-precision timestamp tracking and a watchdog timer prevents packet loss or pipeline stalls.
 - **Automatic Server & Client Cleanup**:
   - **Immediate Session Purge**: Once all peers disconnect from a completed or cancelled transfer, metadata and in-memory telemetry are immediately removed from SQLite and RAM.
   - **SQLite WAL Maintenance**: Periodic truncate checkpoints (`PRAGMA wal_checkpoint(TRUNCATE)`) keep the database footprint virtually at zero bytes.

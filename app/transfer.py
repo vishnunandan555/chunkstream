@@ -389,8 +389,8 @@ async def handle_websocket_message(websocket: WebSocket, raw_message: str) -> No
             logger.warning("[%s] Chunk %d delivery failed: receiver disconnected", transfer_id, chunk_index)
         return
 
-    # 7. Resume Request: receiver announces missing chunks to sender
-    elif msg_type == "resume_request":
+    # 7. Resume Request / Missing Chunk Pull
+    elif msg_type in ("resume_request", "request_missing"):
         update_transfer_status(transfer_id, "transferring")
         # Forward missing chunk request directly to sender
         missing_chunks = data.get("missing_chunks", [])
