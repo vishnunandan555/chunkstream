@@ -112,6 +112,10 @@ let rxChunksMap = new Map(); // In-memory chunk buffer until complete
 let rxReceivedIndices = new Set();
 let rxTransferData = null;
 
+let isPumping = false;
+let senderPingTimer = null;
+let rxPingTimer = null;
+
 // DOM Elements - Navigation & Device
 const homeLink = document.getElementById('home-link');
 const btnChoiceSend = document.getElementById('btn-choice-send');
@@ -488,6 +492,12 @@ function connectSenderWebSocket() {
   senderWs.onopen = () => {
     sendPeerInfo('sender', senderWs);
     addActivityLog('sender', 'Connected to relay server. Waiting for peer...');
+    if (senderPingTimer) clearInterval(senderPingTimer);
+    senderPingTimer = setInterval(() => {
+      if (senderWs && senderWs.readyState === WebSocket.OPEN) {
+        try { senderWs.send(JSON.stringify({ type: 'ping', client_ts: Date.now() })); } catch (_) {}
+      }
+    }, 10000);
   };
 
   senderWs.onmessage = async (e) => {
@@ -567,6 +577,10 @@ function connectSenderWebSocket() {
   };
 
   senderWs.onclose = () => {
+    if (senderPingTimer) {
+      clearInterval(senderPingTimer);
+      senderPingTimer = null;
+    }
     if (isStreaming && ackedChunks.size < totalChunks) {
       senderStatusDot.className = 'status-dot';
       senderStatusText.textContent = 'Connection closed. Transfer stopped.';
@@ -609,45 +623,50 @@ function handlePeerInfo(role, msg) {
 const MAX_IN_FLIGHT = 6;
 
 async function pumpPipeline() {
-  if (isPaused || !isStreaming || !senderWs || senderWs.readyState !== WebSocket.OPEN || !currentFile) return;
+  if (isPumping || isPaused || !isStreaming || !senderWs || senderWs.readyState !== WebSocket.OPEN || !currentFile) return;
 
-  while (inFlightChunks.size < MAX_IN_FLIGHT && (ackedChunks.size + inFlightChunks.size) < totalChunks) {
-    let nextIdx = -1;
-    for (let i = 0; i < totalChunks; i++) {
-      if (!ackedChunks.has(i) && !inFlightChunks.has(i)) {
-        nextIdx = i;
-        break;
+  isPumping = true;
+  try {
+    while (inFlightChunks.size < MAX_IN_FLIGHT && (ackedChunks.size + inFlightChunks.size) < totalChunks) {
+      let nextIdx = -1;
+      for (let i = 0; i < totalChunks; i++) {
+        if (!ackedChunks.has(i) && !inFlightChunks.has(i)) {
+          nextIdx = i;
+          break;
+        }
       }
-    }
-    if (nextIdx === -1) break;
+      if (nextIdx === -1) break;
 
-    inFlightChunks.add(nextIdx);
-    inFlightTimestamps.set(nextIdx, Date.now());
+      inFlightChunks.add(nextIdx);
+      inFlightTimestamps.set(nextIdx, Date.now());
 
-    const start = nextIdx * chunkSize;
-    const end = Math.min(start + chunkSize, currentFile.size);
-    const slice = currentFile.slice(start, end);
+      const start = nextIdx * chunkSize;
+      const end = Math.min(start + chunkSize, currentFile.size);
+      const slice = currentFile.slice(start, end);
 
-    try {
-      const buf = await slice.arrayBuffer();
-      if (!isStreaming || isPaused || !senderWs || senderWs.readyState !== WebSocket.OPEN) {
+      try {
+        const buf = await slice.arrayBuffer();
+        if (!isStreaming || isPaused || !senderWs || senderWs.readyState !== WebSocket.OPEN) {
+          inFlightChunks.delete(nextIdx);
+          inFlightTimestamps.delete(nextIdx);
+          break;
+        }
+        const b64 = arrayBufferToBase64(buf);
+        senderWs.send(JSON.stringify({
+          type: 'chunk',
+          index: nextIdx,
+          data: b64,
+          total: totalChunks,
+        }));
+      } catch (err) {
+        console.error('Slice read error at chunk', nextIdx, err);
         inFlightChunks.delete(nextIdx);
         inFlightTimestamps.delete(nextIdx);
         break;
       }
-      const b64 = arrayBufferToBase64(buf);
-      senderWs.send(JSON.stringify({
-        type: 'chunk',
-        index: nextIdx,
-        data: b64,
-        total: totalChunks,
-      }));
-    } catch (err) {
-      console.error('Slice read error at chunk', nextIdx, err);
-      inFlightChunks.delete(nextIdx);
-      inFlightTimestamps.delete(nextIdx);
-      break;
     }
+  } finally {
+    isPumping = false;
   }
 }
 
@@ -681,7 +700,7 @@ async function startStreamingChunks(specificIndices = null) {
       const now = Date.now();
       let hasTimedOut = false;
       for (const [idx, ts] of inFlightTimestamps.entries()) {
-        if (now - ts > 2500) {
+        if (now - ts > 4000) {
           inFlightChunks.delete(idx);
           inFlightTimestamps.delete(idx);
           hasTimedOut = true;
@@ -721,6 +740,12 @@ function handleChunkAck(index) {
 
   senderProgressBytes.textContent = `${formatBytes(bytesSent)} / ${formatBytes(totalBytes)}`;
   senderProgressChunks.textContent = `Chunk ${ackedChunks.size}/${totalChunks}`;
+
+  if (ackedChunks.size === 1) {
+    addActivityLog('sender', 'Live streaming active • Delivering chunks...');
+  } else if ((ackedChunks.size % 25 === 0) || (ackedChunks.size === totalChunks)) {
+    addActivityLog('sender', `Delivered chunk ${ackedChunks.size}/${totalChunks} (${pct}%) • ${senderSpeed.textContent}`);
+  }
 
   if (ackedChunks.size === totalChunks) {
     isStreaming = false;
@@ -802,10 +827,15 @@ function cancelTransfer() {
 }
 
 function resetSender() {
+  if (senderPingTimer) {
+    clearInterval(senderPingTimer);
+    senderPingTimer = null;
+  }
   if (pipelineWatchdog) {
     clearInterval(pipelineWatchdog);
     pipelineWatchdog = null;
   }
+  isPumping = false;
   if (senderWs) {
     try { senderWs.close(); } catch (_) {}
     senderWs = null;
@@ -881,6 +911,12 @@ function connectReceiverWebSocket(code) {
   receiverWs.onopen = () => {
     sendPeerInfo('rx', receiverWs);
     addActivityLog('rx', 'Connected to relay server. Waiting for sender...');
+    if (rxPingTimer) clearInterval(rxPingTimer);
+    rxPingTimer = setInterval(() => {
+      if (receiverWs && receiverWs.readyState === WebSocket.OPEN) {
+        try { receiverWs.send(JSON.stringify({ type: 'ping', client_ts: Date.now() })); } catch (_) {}
+      }
+    }, 10000);
   };
 
   receiverWs.onmessage = async (e) => {
@@ -931,6 +967,10 @@ function connectReceiverWebSocket(code) {
   };
 
   receiverWs.onclose = () => {
+    if (rxPingTimer) {
+      clearInterval(rxPingTimer);
+      rxPingTimer = null;
+    }
     if (rxTransferData && rxReceivedIndices.size < rxTransferData.total_chunks) {
       rxStatusDot.className = 'status-dot';
       rxStatusText.textContent = 'Connection lost.';
@@ -1063,6 +1103,10 @@ btnReceiveAgain.addEventListener('click', () => {
 });
 
 function resetReceiver() {
+  if (rxPingTimer) {
+    clearInterval(rxPingTimer);
+    rxPingTimer = null;
+  }
   if (receiverWs) {
     try { receiverWs.close(); } catch (_) {}
     receiverWs = null;

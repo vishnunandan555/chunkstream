@@ -335,8 +335,11 @@ async def transfer_websocket(
         if record and record.get("status") not in ("completed", "paused", "cancelled"):
             update_transfer_status(transfer_id, "interrupted")
     except Exception as exc:
-        logger.error("[%s] WebSocket error for role=%s: %s", transfer_id, role.upper(), exc)
+        logger.info("[%s] WebSocket connection closed for role=%s: %s", transfer_id, role.upper(), exc)
         manager.disconnect(websocket)
+        record = get_transfer(transfer_id)
+        if record and record.get("status") not in ("completed", "paused", "cancelled"):
+            update_transfer_status(transfer_id, "interrupted")
 
 
 # Mount static frontend

@@ -63,6 +63,7 @@ class ConnectionManager:
     def __init__(self) -> None:
         self.active_connections: Dict[str, Set[WebSocket]] = {}
         self.connection_meta: Dict[WebSocket, Dict[str, str]] = {}
+        self.connection_locks: Dict[WebSocket, asyncio.Lock] = {}
 
     def get_total_active_connections(self) -> int:
         return sum(len(ws_set) for ws_set in self.active_connections.values())
@@ -97,6 +98,7 @@ class ConnectionManager:
             self.active_connections[transfer_id] = set()
         self.active_connections[transfer_id].add(websocket)
         self.connection_meta[websocket] = {"transfer_id": transfer_id, "role": role}
+        self.connection_locks[websocket] = asyncio.Lock()
 
         client_host = getattr(websocket.client, "host", "unknown") if websocket.client else "unknown"
         logger.info(
@@ -117,6 +119,7 @@ class ConnectionManager:
         )
 
     def disconnect(self, websocket: WebSocket) -> None:
+        self.connection_locks.pop(websocket, None)
         meta = self.connection_meta.pop(websocket, None)
         if meta:
             transfer_id = meta["transfer_id"]
@@ -171,19 +174,28 @@ class ConnectionManager:
                     )
                 )
 
+    async def safe_send(self, websocket: WebSocket, payload: str) -> bool:
+        """Sends a WebSocket text payload safely under a per-connection lock to avoid concurrency errors."""
+        lock = self.connection_locks.get(websocket)
+        if lock is None:
+            return False
+        async with lock:
+            try:
+                await websocket.send_text(payload)
+                return True
+            except Exception as exc:
+                logger.warning("Failed to deliver WebSocket text message: %s", exc)
+                return False
+
     async def broadcast(self, transfer_id: str, message: Dict[str, Any]) -> None:
         if transfer_id not in self.active_connections:
             return
         payload = json.dumps(message)
-        dead_sockets = []
-        for ws in self.active_connections[transfer_id]:
-            try:
-                await ws.send_text(payload)
-            except Exception:
-                dead_sockets.append(ws)
-
-        for ws in dead_sockets:
-            self.disconnect(ws)
+        sockets = list(self.active_connections.get(transfer_id, ()))
+        for ws in sockets:
+            ok = await self.safe_send(ws, payload)
+            if not ok:
+                self.disconnect(ws)
 
     async def send_to_role(
         self, transfer_id: str, target_role: str, message: Dict[str, Any]
@@ -192,16 +204,15 @@ class ConnectionManager:
             return False
         target_sockets = [
             ws
-            for ws in self.active_connections[transfer_id]
+            for ws in list(self.active_connections.get(transfer_id, ()))
             if self.connection_meta.get(ws, {}).get("role") == target_role
         ]
         if not target_sockets:
             return False
         payload = json.dumps(message)
         for ws in target_sockets:
-            try:
-                await ws.send_text(payload)
-            except Exception:
+            ok = await self.safe_send(ws, payload)
+            if not ok:
                 self.disconnect(ws)
         return True
 
@@ -336,8 +347,8 @@ async def handle_websocket_message(websocket: WebSocket, raw_message: str) -> No
 
         record_chunk_throughput(transfer_id, chunk_size)
 
-        # Periodic log for Render live tail visibility
-        if total_chunks and (chunk_index == 0 or (chunk_index + 1) % 25 == 0 or (chunk_index + 1) == total_chunks):
+        # Periodic log for Render live tail visibility (first 5 chunks, every 20, and last)
+        if total_chunks and (chunk_index < 5 or (chunk_index + 1) % 20 == 0 or (chunk_index + 1) == total_chunks):
             telem = _transfer_telemetry.get(transfer_id, {})
             total_b = telem.get("total_bytes", chunk_size)
             elapsed = max(0.001, time.perf_counter() - telem.get("start_time", time.perf_counter()))
@@ -353,24 +364,27 @@ async def handle_websocket_message(websocket: WebSocket, raw_message: str) -> No
                 speed_mb,
             )
 
-        # ACK to sender immediately so flow control advances
-        await websocket.send_text(
+        # ACK to sender immediately so sender pipeline advances
+        await manager.safe_send(
+            websocket,
             json.dumps({"type": "chunk_ack", "index": chunk_index, "transfer_id": transfer_id})
         )
 
-        # Forward chunk directly to receiver in real time (streamed straight to receiver disk/RAM)
-        await manager.send_to_role(
-            transfer_id,
-            "receiver",
-            {
-                "type": "chunk_data",
-                "transfer_id": transfer_id,
-                "index": chunk_index,
-                "total": total_chunks,
-                "size": chunk_size,
-                "data": chunk_data_b64,
-                "hash": chunk_hash,
-            },
+        # Forward chunk directly to receiver asynchronously so sender read loop NEVER blocks
+        asyncio.create_task(
+            manager.send_to_role(
+                transfer_id,
+                "receiver",
+                {
+                    "type": "chunk_data",
+                    "transfer_id": transfer_id,
+                    "index": chunk_index,
+                    "total": total_chunks,
+                    "size": chunk_size,
+                    "data": chunk_data_b64,
+                    "hash": chunk_hash,
+                },
+            )
         )
         return
 
