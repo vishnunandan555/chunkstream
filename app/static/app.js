@@ -1,4 +1,4 @@
-// Theme Toggle Logic
+// Theme Management
 const themeToggle = document.getElementById('theme-toggle');
 const iconSun = document.querySelector('.icon-sun');
 const iconMoon = document.querySelector('.icon-moon');
@@ -7,14 +7,14 @@ function applyTheme(theme) {
   if (theme === 'light') {
     document.documentElement.setAttribute('data-theme', 'light');
     if (iconSun && iconMoon) {
-      iconSun.classList.remove('hidden');
-      iconMoon.classList.add('hidden');
+      iconSun.classList.add('hidden');
+      iconMoon.classList.remove('hidden');
     }
   } else {
     document.documentElement.removeAttribute('data-theme');
     if (iconSun && iconMoon) {
-      iconSun.classList.add('hidden');
-      iconMoon.classList.remove('hidden');
+      iconSun.classList.remove('hidden');
+      iconMoon.classList.add('hidden');
     }
   }
 }
@@ -31,22 +31,38 @@ if (themeToggle) {
   });
 }
 
-const ADJECTIVES = ['Brave', 'Swift', 'Cosmic', 'Silent', 'Neon', 'Solar', 'Lunar', 'Electric', 'Clever', 'Amber', 'Mystic', 'Frost', 'Bold', 'Agile', 'Shadow', 'Velvet'];
-const ANIMALS = ['Falcon', 'Otter', 'Lynx', 'Dolphin', 'Fox', 'Eagle', 'Hawk', 'Badger', 'Panda', 'Tiger', 'Wolf', 'Phoenix', 'Rabbit', 'Owl', 'Panther', 'Koala'];
-
-function generateRandomPeerName() {
-  const adj = ADJECTIVES[Math.floor(Math.random() * ADJECTIVES.length)];
-  const animal = ANIMALS[Math.floor(Math.random() * ANIMALS.length)];
-  return `${adj} ${animal}`;
+// Helpers
+function formatBytes(bytes) {
+  if (!bytes || bytes === 0) return '0 B';
+  const k = 1024;
+  const sizes = ['B', 'KB', 'MB', 'GB'];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
 }
 
-let myPeerName = sessionStorage.getItem('cs_peer_name');
-if (!myPeerName) {
-  myPeerName = generateRandomPeerName();
-  sessionStorage.setItem('cs_peer_name', myPeerName);
+function formatDuration(sec) {
+  if (!isFinite(sec) || sec <= 0) return '--';
+  if (sec < 60) return `${Math.ceil(sec)}s`;
+  const m = Math.floor(sec / 60);
+  const s = Math.ceil(sec % 60);
+  return `${m}m ${s}s`;
 }
-document.getElementById('global-peer-name').textContent = myPeerName;
 
+function generate4DigitCode() {
+  return Math.floor(1000 + Math.random() * 9000).toString();
+}
+
+function arrayBufferToBase64(buffer) {
+  const bytes = new Uint8Array(buffer);
+  let binary = '';
+  const batchSize = 8192;
+  for (let i = 0; i < bytes.length; i += batchSize) {
+    binary += String.fromCharCode.apply(null, bytes.subarray(i, i + batchSize));
+  }
+  return window.btoa(binary);
+}
+
+// Global State
 let currentFile = null;
 let currentCode = null;
 let senderWs = null;
@@ -64,29 +80,6 @@ let rxStartTime = 0;
 let rxPendingDownloadUrl = null;
 let rxPendingFilename = null;
 
-// Format helper
-function formatBytes(bytes) {
-  if (bytes === 0) return '0 B';
-  const k = 1024;
-  const sizes = ['B', 'KB', 'MB', 'GB'];
-  const i = Math.floor(Math.log(bytes) / Math.log(k));
-  return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
-}
-
-function generate4DigitCode() {
-  return Math.floor(1000 + Math.random() * 9000).toString();
-}
-
-function arrayBufferToBase64(buffer) {
-  const bytes = new Uint8Array(buffer);
-  let binary = '';
-  const batchSize = 8192;
-  for (let i = 0; i < bytes.length; i += batchSize) {
-    binary += String.fromCharCode.apply(null, bytes.subarray(i, i + batchSize));
-  }
-  return window.btoa(binary);
-}
-
 // DOM Elements
 const viewHome = document.getElementById('view-home');
 const viewSend = document.getElementById('view-send');
@@ -100,7 +93,7 @@ const btnBackFromReceive = document.getElementById('btn-back-from-receive');
 
 // Sender Elements
 const fileInput = document.getElementById('file-input');
-const dropBox = document.getElementById('drop-box');
+const dropZone = document.getElementById('drop-zone');
 const senderStepPick = document.getElementById('sender-step-pick');
 const senderStepTransfer = document.getElementById('sender-step-transfer');
 const sendFileName = document.getElementById('send-file-name');
@@ -108,14 +101,14 @@ const sendFileSize = document.getElementById('send-file-size');
 const senderCodeDisplay = document.getElementById('sender-code-display');
 const btnCopyCode = document.getElementById('btn-copy-code');
 const senderStatusText = document.getElementById('sender-status-text');
-const senderStatusSub = document.getElementById('sender-status-sub');
 const senderStatusDot = document.getElementById('sender-status-dot');
 const senderProgressBox = document.getElementById('sender-progress-box');
 const senderProgressFill = document.getElementById('sender-progress-fill');
 const senderProgressPct = document.getElementById('sender-progress-pct');
 const senderSpeed = document.getElementById('sender-speed');
-const senderProgressDetails = document.getElementById('sender-progress-details');
-const senderChunkDetails = document.getElementById('sender-chunk-details');
+const senderEta = document.getElementById('sender-eta');
+const senderProgressBytes = document.getElementById('sender-progress-bytes');
+const senderProgressChunks = document.getElementById('sender-progress-chunks');
 const btnSendAgain = document.getElementById('btn-send-again');
 const btnResumeSend = document.getElementById('btn-resume-send');
 
@@ -127,19 +120,20 @@ const btnStartReceive = document.getElementById('btn-start-receive');
 const rxFileName = document.getElementById('rx-file-name');
 const rxFileSize = document.getElementById('rx-file-size');
 const rxStatusText = document.getElementById('rx-status-text');
-const rxStatusSub = document.getElementById('rx-status-sub');
+const rxStatusDot = document.getElementById('rx-status-dot');
 const rxProgressBox = document.getElementById('rx-progress-box');
 const rxProgressFill = document.getElementById('rx-progress-fill');
 const rxProgressPct = document.getElementById('rx-progress-pct');
 const rxSpeed = document.getElementById('rx-speed');
-const rxProgressDetails = document.getElementById('rx-progress-details');
-const rxChunkDetails = document.getElementById('rx-chunk-details');
+const rxEta = document.getElementById('rx-eta');
+const rxProgressBytes = document.getElementById('rx-progress-bytes');
+const rxProgressChunks = document.getElementById('rx-progress-chunks');
 const rxDownloadReadyBox = document.getElementById('rx-download-ready-box');
 const btnTriggerDownload = document.getElementById('btn-trigger-download');
 const rxClearedBox = document.getElementById('rx-cleared-box');
 const btnReceiveAgain = document.getElementById('btn-receive-again');
 
-// Navigation between views
+// Navigation
 function showView(view) {
   viewHome.classList.add('hidden');
   viewSend.classList.add('hidden');
@@ -148,7 +142,8 @@ function showView(view) {
 }
 
 homeLink.addEventListener('click', () => {
-  resetAll();
+  resetSender();
+  resetReceiver();
   showView(viewHome);
 });
 
@@ -174,21 +169,19 @@ btnBackFromReceive.addEventListener('click', () => {
   showView(viewHome);
 });
 
-// ----------------------------------------------------
-// SENDER FLOW
-// ----------------------------------------------------
-dropBox.addEventListener('click', () => fileInput.click());
+// Sender Drag & Drop
+dropZone.addEventListener('click', () => fileInput.click());
 
-dropBox.addEventListener('dragover', (e) => {
+dropZone.addEventListener('dragover', (e) => {
   e.preventDefault();
-  dropBox.classList.add('dragover');
+  dropZone.classList.add('dragover');
 });
 
-dropBox.addEventListener('dragleave', () => dropBox.classList.remove('dragover'));
+dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover'));
 
-dropBox.addEventListener('drop', (e) => {
+dropZone.addEventListener('drop', (e) => {
   e.preventDefault();
-  dropBox.classList.remove('dragover');
+  dropZone.classList.remove('dragover');
   if (e.dataTransfer.files.length > 0) {
     handleFileSelected(e.dataTransfer.files[0]);
   }
@@ -201,9 +194,10 @@ fileInput.addEventListener('change', (e) => {
 });
 
 btnCopyCode.addEventListener('click', () => {
+  if (!currentCode) return;
   navigator.clipboard.writeText(currentCode).then(() => {
     btnCopyCode.textContent = 'Copied!';
-    setTimeout(() => btnCopyCode.textContent = 'Copy Code', 1500);
+    setTimeout(() => { btnCopyCode.textContent = 'Copy Code'; }, 1500);
   });
 });
 
@@ -223,12 +217,11 @@ async function handleFileSelected(file) {
   senderStepPick.classList.add('hidden');
   senderStepTransfer.classList.remove('hidden');
   senderStatusText.textContent = 'Waiting for receiver to connect...';
-  senderStatusSub.textContent = `You are ${myPeerName}. Transfer begins once receiver connects`;
-  senderStatusDot.className = 'pulse-dot';
+  senderStatusDot.className = 'status-dot';
   senderProgressBox.classList.add('hidden');
   btnSendAgain.classList.add('hidden');
+  btnResumeSend.classList.add('hidden');
 
-  // Register transfer on server
   try {
     await fetch('/api/transfers', {
       method: 'POST',
@@ -238,14 +231,13 @@ async function handleFileSelected(file) {
         filename: file.name,
         filesize: file.size,
         chunk_size: chunkSize,
-        total_chunks: totalChunks
-      })
+        total_chunks: totalChunks,
+      }),
     });
   } catch (err) {
-    console.error("Could not register transfer:", err);
+    console.error('Failed to init transfer:', err);
   }
 
-  // Connect sender socket
   connectSenderWebSocket();
 }
 
@@ -253,87 +245,57 @@ function connectSenderWebSocket() {
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
   senderWs = new WebSocket(`${protocol}//${window.location.host}/ws/transfer/${currentCode}?role=sender`);
 
-  senderWs.onopen = () => {
-    // Announce peer name
-    senderWs.send(JSON.stringify({ type: 'peer_info', peer_name: myPeerName, role: 'sender' }));
-  };
-
   senderWs.onmessage = (e) => {
     try {
       const msg = JSON.parse(e.data);
-      // Transfer ONLY starts when receiver connects and requests chunks!
       if (msg.type === 'peer_connected' && msg.role === 'receiver') {
-        if (btnResumeSend) btnResumeSend.classList.add('hidden');
-        startStreamingChunks(null, msg.peer_name);
-      } else if (msg.type === 'request_missing' || msg.type === 'receiver_ready') {
-        if (btnResumeSend) btnResumeSend.classList.add('hidden');
-        startStreamingChunks(msg.missing_chunks, msg.peer_name);
-      } else if (msg.type === 'peer_info' && msg.role === 'receiver') {
-        senderStatusSub.textContent = `Connected to ${msg.peer_name || 'receiver'}`;
+        startStreamingChunks();
+      } else if (msg.type === 'request_missing') {
+        startStreamingChunks(msg.missing_chunks);
       } else if (msg.type === 'chunk_ack') {
         handleChunkAck(msg.index);
-      } else if (msg.type === 'error') {
+      } else if (msg.type === 'peer_disconnected' && msg.role === 'receiver') {
         isStreaming = false;
-        senderStatusDot.className = 'pulse-dot red';
-        senderStatusText.textContent = `⚠️ ${msg.message || 'Transfer paused'}`;
-        senderStatusSub.textContent = msg.error_code === 'ACK_TIMEOUT'
-          ? 'Transfer halted: 10 chunks unacknowledged by receiver. Check receiver connection.'
-          : 'Transfer paused: Receiver disconnected or offline.';
-        if (btnResumeSend) btnResumeSend.classList.remove('hidden');
-      } else if (msg.type === 'peer_disconnected') {
-        if (msg.role === 'receiver') {
-          isStreaming = false;
-          senderStatusDot.className = 'pulse-dot red';
-          senderStatusText.textContent = '⚠️ Receiver disconnected';
-          senderStatusSub.textContent = 'Transfer paused mid-stream. Waiting for receiver to reconnect.';
-          if (btnResumeSend) btnResumeSend.classList.remove('hidden');
-        }
+        senderStatusDot.className = 'status-dot red';
+        senderStatusText.textContent = 'Receiver disconnected. Transfer paused.';
+        btnResumeSend.classList.remove('hidden');
       }
     } catch (err) {
-      console.warn("Sender WS error:", err);
+      console.warn('Sender WS error:', err);
     }
   };
 }
 
-function startStreamingChunks(missing, peerName) {
-  if (peerName) {
-    senderStatusSub.textContent = `Connected to ${peerName}`;
-  }
-  if (btnResumeSend) btnResumeSend.classList.add('hidden');
+function startStreamingChunks(missingList) {
+  btnResumeSend.classList.add('hidden');
   if (isStreaming) {
-    if (missing && missing.length > 0) {
-      streamFileChunks(missing);
+    if (missingList && missingList.length > 0) {
+      streamFileChunks(missingList);
     }
     return;
   }
+
   isStreaming = true;
   senderStartTime = Date.now();
-
-  const receiverLabel = peerName ? `to ${peerName}` : 'to receiver';
-  senderStatusText.textContent = `Connected! Sending file ${receiverLabel}...`;
-  senderStatusSub.textContent = 'Streaming chunks in real time';
-  senderStatusDot.className = 'pulse-dot green';
+  senderStatusText.textContent = 'Streaming file to receiver...';
+  senderStatusDot.className = 'status-dot green';
   senderProgressBox.classList.remove('hidden');
 
-  streamFileChunks(missing);
+  streamFileChunks(missingList);
 }
 
 async function streamFileChunks(missingList) {
-  const chunksToSend = missingList && missingList.length > 0 
-    ? missingList 
+  const chunksToSend = missingList && missingList.length > 0
+    ? missingList
     : Array.from({ length: totalChunks }, (_, i) => i);
 
   for (const idx of chunksToSend) {
-    if (!isStreaming) {
-      console.warn("Transfer paused or stopped, exiting streamFileChunks loop.");
-      break;
-    }
+    if (!isStreaming) break;
     if (ackedChunks.has(idx)) continue;
 
-    // Concurrency limit
-    while (inFlightChunks.size >= 3) {
+    while (inFlightChunks.size >= 4) {
       if (!isStreaming) break;
-      await new Promise(r => setTimeout(r, 20));
+      await new Promise(r => setTimeout(r, 15));
     }
     if (!isStreaming) break;
 
@@ -349,11 +311,11 @@ async function streamFileChunks(missingList) {
         type: 'chunk',
         index: idx,
         total: totalChunks,
-        data: b64
+        data: b64,
       }));
     }
 
-    await new Promise(r => setTimeout(r, 10));
+    await new Promise(r => setTimeout(r, 5));
   }
 }
 
@@ -366,19 +328,23 @@ function handleChunkAck(index) {
   senderProgressFill.style.width = `${pct}%`;
   senderProgressPct.textContent = `${pct}%`;
 
-  // Calculate speed
   const elapsedSec = (Date.now() - senderStartTime) / 1000;
-  if (elapsedSec > 0.3) {
-    const mbps = ((bytesSent / (1024 * 1024)) / elapsedSec).toFixed(1);
+  if (elapsedSec > 0.2) {
+    const speedBytesPerSec = bytesSent / elapsedSec;
+    const mbps = (speedBytesPerSec / (1024 * 1024)).toFixed(1);
     senderSpeed.textContent = `${mbps} MB/s`;
+
+    const remainingBytes = currentFile.size - bytesSent;
+    const etaSec = speedBytesPerSec > 0 ? remainingBytes / speedBytesPerSec : 0;
+    senderEta.textContent = formatDuration(etaSec);
   }
 
-  senderProgressDetails.textContent = `${formatBytes(bytesSent)} / ${formatBytes(currentFile.size)}`;
-  senderChunkDetails.textContent = `Chunk ${ackedChunks.size}/${totalChunks}`;
+  senderProgressBytes.textContent = `${formatBytes(bytesSent)} / ${formatBytes(currentFile.size)}`;
+  senderProgressChunks.textContent = `Chunk ${ackedChunks.size}/${totalChunks}`;
 
   if (ackedChunks.size === totalChunks) {
     senderStatusText.textContent = '✓ Transfer complete!';
-    senderStatusSub.textContent = 'All chunks uploaded and verified';
+    senderStatusDot.className = 'status-dot green';
     btnSendAgain.classList.remove('hidden');
     if (senderWs && senderWs.readyState === WebSocket.OPEN) {
       senderWs.send(JSON.stringify({ type: 'complete' }));
@@ -391,12 +357,27 @@ btnSendAgain.addEventListener('click', () => {
   fileInput.click();
 });
 
+btnResumeSend.addEventListener('click', async () => {
+  btnResumeSend.classList.add('hidden');
+  senderStatusText.textContent = 'Resuming transfer...';
+  senderStatusDot.className = 'status-dot';
+  try {
+    const res = await fetch(`/api/transfers/${currentCode}`);
+    if (res.ok) {
+      const info = await res.json();
+      startStreamingChunks(info.missing_chunks);
+    }
+  } catch (err) {
+    senderStatusText.textContent = 'Could not fetch transfer state';
+    senderStatusDot.className = 'status-dot red';
+  }
+});
+
 function resetSender() {
   if (senderWs) {
     senderWs.close();
     senderWs = null;
   }
-  if (btnResumeSend) btnResumeSend.classList.add('hidden');
   currentFile = null;
   currentCode = null;
   isStreaming = false;
@@ -405,29 +386,7 @@ function resetSender() {
   fileInput.value = '';
 }
 
-if (btnResumeSend) {
-  btnResumeSend.addEventListener('click', async () => {
-    btnResumeSend.classList.add('hidden');
-    senderStatusText.textContent = 'Resuming transfer...';
-    senderStatusSub.textContent = 'Checking missing chunks with server...';
-    senderStatusDot.className = 'pulse-dot green';
-    try {
-      const res = await fetch(`/api/transfers/${currentCode}`);
-      if (res.ok) {
-        const info = await res.json();
-        startStreamingChunks(info.missing_chunks);
-      }
-    } catch (err) {
-      senderStatusText.textContent = '❌ Resume failed';
-      senderStatusSub.textContent = err.message || 'Could not fetch transfer state from server';
-      if (senderStatusDot) senderStatusDot.className = 'pulse-dot red';
-    }
-  });
-}
-
-// ----------------------------------------------------
-// RECEIVER FLOW
-// ----------------------------------------------------
+// Receiver Flow
 btnStartReceive.addEventListener('click', startReceiving);
 
 receiveCodeInput.addEventListener('keydown', (e) => {
@@ -441,7 +400,6 @@ async function startReceiving() {
     return;
   }
 
-  // Get transfer details from server
   try {
     const res = await fetch(`/api/transfers/${code}`);
     if (!res.ok) throw new Error('Transfer code not found or expired');
@@ -453,10 +411,13 @@ async function startReceiving() {
     receiverStepInput.classList.add('hidden');
     receiverStepTransfer.classList.remove('hidden');
     rxStatusText.textContent = 'Connecting to sender...';
-    rxStatusSub.textContent = `You are ${myPeerName}`;
+    rxStatusDot.className = 'status-dot';
     rxProgressFill.style.width = '0%';
     rxProgressPct.textContent = '0%';
     rxSpeed.textContent = '0.0 MB/s';
+    rxEta.textContent = '--';
+    rxProgressBytes.textContent = `0 B / ${formatBytes(data.filesize)}`;
+    rxProgressChunks.textContent = `Chunk 0/${data.total_chunks}`;
     rxProgressBox.classList.remove('hidden');
     rxDownloadReadyBox.classList.add('hidden');
     rxClearedBox.classList.add('hidden');
@@ -478,31 +439,21 @@ function connectReceiverWebSocket(code, transferData) {
   const total = transferData.total_chunks;
 
   receiverWs.onopen = () => {
-    rxStatusText.textContent = 'Receiving file...';
-    // Tell sender we are ready and announce name
-    receiverWs.send(JSON.stringify({ 
-      type: 'resume_request', 
-      peer_name: myPeerName 
-    }));
+    rxStatusText.textContent = 'Connected. Waiting for chunks...';
+    rxStatusDot.className = 'status-dot green';
+    receiverWs.send(JSON.stringify({ type: 'resume_request' }));
   };
 
   receiverWs.onmessage = (e) => {
     try {
       const msg = JSON.parse(e.data);
-      if (msg.type === 'peer_info' && msg.role === 'sender') {
-        rxStatusSub.textContent = `Receiving from ${msg.peer_name || 'sender'}`;
+      if (msg.type === 'peer_disconnected' && msg.role === 'sender') {
+        rxStatusDot.className = 'status-dot red';
+        rxStatusText.textContent = 'Sender disconnected. Waiting...';
       } else if (msg.type === 'peer_connected' && msg.role === 'sender') {
-        const rxDot = document.getElementById('rx-status-dot');
-        if (rxDot) rxDot.className = 'pulse-dot green';
+        rxStatusDot.className = 'status-dot green';
         rxStatusText.textContent = 'Receiving file...';
-        rxStatusSub.textContent = `Sender connected (${msg.peer_name || 'sender'})`;
-      } else if (msg.type === 'peer_disconnected' && msg.role === 'sender') {
-        const rxDot = document.getElementById('rx-status-dot');
-        if (rxDot) rxDot.className = 'pulse-dot red';
-        rxStatusText.textContent = '⚠️ Sender disconnected';
-        rxStatusSub.textContent = 'Transfer paused mid-stream. Waiting for sender...';
       } else if (msg.type === 'chunk_data') {
-        // Send ACK back to server immediately!
         if (receiverWs && receiverWs.readyState === WebSocket.OPEN) {
           receiverWs.send(JSON.stringify({ type: 'rx_ack', index: msg.index }));
         }
@@ -514,15 +465,19 @@ function connectReceiverWebSocket(code, transferData) {
         rxProgressFill.style.width = `${pct}%`;
         rxProgressPct.textContent = `${pct}%`;
 
-        // Calculate speed
         const elapsedSec = (Date.now() - rxStartTime) / 1000;
-        if (elapsedSec > 0.3) {
-          const mbps = ((rxBytesReceived / (1024 * 1024)) / elapsedSec).toFixed(1);
+        if (elapsedSec > 0.2) {
+          const speedBytesPerSec = rxBytesReceived / elapsedSec;
+          const mbps = (speedBytesPerSec / (1024 * 1024)).toFixed(1);
           rxSpeed.textContent = `${mbps} MB/s`;
+
+          const remainingBytes = transferData.filesize - rxBytesReceived;
+          const etaSec = speedBytesPerSec > 0 ? remainingBytes / speedBytesPerSec : 0;
+          rxEta.textContent = formatDuration(etaSec);
         }
 
-        rxProgressDetails.textContent = `${formatBytes(rxBytesReceived)} / ${formatBytes(transferData.filesize)}`;
-        rxChunkDetails.textContent = `Chunk ${receivedChunks.size}/${total}`;
+        rxProgressBytes.textContent = `${formatBytes(rxBytesReceived)} / ${formatBytes(transferData.filesize)}`;
+        rxProgressChunks.textContent = `Chunk ${receivedChunks.size}/${total}`;
 
         if (receivedChunks.size === total) {
           showDownloadReady(code, transferData.filename);
@@ -531,32 +486,26 @@ function connectReceiverWebSocket(code, transferData) {
         showDownloadReady(code, transferData.filename);
       }
     } catch (err) {
-      rxStatusText.textContent = '⚠️ Protocol error';
-      rxStatusSub.textContent = err.message || 'Error processing transfer message';
-      const rxDot = document.getElementById('rx-status-dot');
-      if (rxDot) rxDot.className = 'pulse-dot red';
+      console.warn('Receiver message error:', err);
     }
   };
 }
 
 function showDownloadReady(code, filename) {
-  rxStatusText.textContent = '✓ File received!';
-  rxStatusSub.textContent = 'Assembled and verified on server';
+  rxStatusText.textContent = '✓ File received & verified';
+  rxStatusDot.className = 'status-dot green';
   rxProgressFill.style.width = '100%';
   rxProgressPct.textContent = '100%';
+  rxEta.textContent = 'Done';
 
   rxPendingDownloadUrl = `/api/transfers/${code}/download`;
   rxPendingFilename = filename;
-
-  // Show "Click here to download" button (do NOT auto-download yet!)
   rxDownloadReadyBox.classList.remove('hidden');
 }
 
-// User clicks download -> file is downloaded by browser -> then cleared!
 btnTriggerDownload.addEventListener('click', () => {
   if (!rxPendingDownloadUrl) return;
 
-  // 1. Trigger browser file download
   const tempLink = document.createElement('a');
   tempLink.href = rxPendingDownloadUrl;
   tempLink.download = rxPendingFilename || 'download';
@@ -564,11 +513,8 @@ btnTriggerDownload.addEventListener('click', () => {
   tempLink.click();
   document.body.removeChild(tempLink);
 
-  // 2. Clear receiver view and show completion
   rxDownloadReadyBox.classList.add('hidden');
   rxProgressBox.classList.add('hidden');
-  rxStatusText.textContent = '';
-  rxStatusSub.textContent = '';
   rxClearedBox.classList.remove('hidden');
 
   rxPendingDownloadUrl = null;

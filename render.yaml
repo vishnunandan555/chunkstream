@@ -2,22 +2,15 @@ services:
   - type: web
     name: chunkstream
     runtime: python
+    plan: free
     buildCommand: pip install -r requirements.txt
-    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT --timeout-keep-alive 65
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT --workers 1 --timeout-keep-alive 65
     healthCheckPath: /api/health
     autoDeploy: true
-    disk:
-      name: chunkstream-data
-      mountPath: /data
-      sizeGB: 10
     envVars:
       - key: PYTHON_VERSION
         value: 3.11.8
       - key: ENVIRONMENT
         value: production
-      - key: CHUNKSTREAM_DATA_DIR
-        value: /data
-      - key: LOG_DIR
-        value: /data/logs
-      - key: LOG_FORMAT
-        value: json
+      - key: LOG_LEVEL
+        value: INFO

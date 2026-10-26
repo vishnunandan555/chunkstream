@@ -3,185 +3,205 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>ChunkStream</title>
-  <meta name="description" content="Super minimal resumable file transfer.">
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
+  <title>ChunkStream - Resumable File Transfer</title>
+  <meta name="description" content="Minimal, ultra-fast resumable chunked file transfers.">
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
-  <div class="container">
-    <header class="header">
-      <button type="button" class="theme-toggle" id="theme-toggle" title="Toggle dark/light mode" aria-label="Toggle theme">
-        <svg class="theme-icon icon-sun hidden" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <circle cx="12" cy="12" r="5"></circle>
-          <line x1="12" y1="1" x2="12" y2="3"></line>
-          <line x1="12" y1="21" x2="12" y2="23"></line>
-          <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line>
-          <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line>
-          <line x1="1" y1="12" x2="3" y2="12"></line>
-          <line x1="21" y1="12" x2="23" y2="12"></line>
-          <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line>
-          <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line>
-        </svg>
-        <svg class="theme-icon icon-moon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
-        </svg>
-      </button>
-      <h1 class="logo" id="home-link">ChunkStream</h1>
-      <p class="tagline">Minimal, direct file transfer</p>
-      <div class="peer-badge">
-        <span class="peer-dot"></span>
-        <span>You are <strong id="global-peer-name">...</strong></span>
+  <div class="app-container">
+    <header class="app-header">
+      <div class="header-top">
+        <h1 class="logo" id="home-link">ChunkStream</h1>
+        <button type="button" class="theme-btn" id="theme-toggle" title="Toggle theme" aria-label="Toggle theme">
+          <svg class="theme-icon icon-sun" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="12" cy="12" r="5"></circle>
+            <line x1="12" y1="1" x2="12" y2="3"></line>
+            <line x1="12" y1="21" x2="12" y2="23"></line>
+            <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line>
+            <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line>
+            <line x1="1" y1="12" x2="3" y2="12"></line>
+            <line x1="21" y1="12" x2="23" y2="12"></line>
+            <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line>
+            <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line>
+          </svg>
+          <svg class="theme-icon icon-moon hidden" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
+          </svg>
+        </button>
       </div>
+      <p class="tagline">Direct, resumable peer-to-peer file transfer</p>
     </header>
 
-    <main class="main">
-      <!-- 1. HOME SCREEN: SEND OR RECEIVE -->
-      <div class="view" id="view-home">
+    <main class="app-main">
+      <!-- 1. HOME VIEW -->
+      <section class="view" id="view-home">
         <div class="actions-grid">
-          <button class="action-card" id="btn-choice-send">
-            <div class="icon-circle send-icon">
-              <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+          <button type="button" class="action-card" id="btn-choice-send">
+            <div class="action-icon send-icon">
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
                 <line x1="12" y1="19" x2="12" y2="5"></line>
                 <polyline points="5 12 12 5 19 12"></polyline>
               </svg>
             </div>
-            <span class="action-title">Send</span>
-            <span class="action-desc">Select a file & get a code</span>
+            <span class="action-title">Send File</span>
+            <span class="action-desc">Select a file and get a 4-digit code</span>
           </button>
 
-          <button class="action-card" id="btn-choice-receive">
-            <div class="icon-circle receive-icon">
-              <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+          <button type="button" class="action-card" id="btn-choice-receive">
+            <div class="action-icon receive-icon">
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
                 <line x1="12" y1="5" x2="12" y2="19"></line>
                 <polyline points="19 12 12 19 5 12"></polyline>
               </svg>
             </div>
-            <span class="action-title">Receive</span>
-            <span class="action-desc">Enter a code to download</span>
+            <span class="action-title">Receive File</span>
+            <span class="action-desc">Enter code to download directly</span>
           </button>
         </div>
-      </div>
+      </section>
 
-      <!-- 2. SENDER SCREEN -->
-      <div class="view hidden" id="view-send">
+      <!-- 2. SENDER VIEW -->
+      <section class="view hidden" id="view-send">
         <div class="card">
           <input type="file" id="file-input" class="hidden-input">
 
-          <!-- Initial: Drop/Select File -->
+          <!-- Step 1: Pick File -->
           <div id="sender-step-pick">
-            <div class="drop-box" id="drop-box">
-              <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+            <div class="drop-zone" id="drop-zone">
+              <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
                 <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
                 <polyline points="17 8 12 3 7 8"></polyline>
                 <line x1="12" y1="3" x2="12" y2="15"></line>
               </svg>
-              <p class="drop-text">Click or drop a file to send</p>
+              <div class="drop-text">Choose a file or drag & drop here</div>
+              <div class="drop-sub">Any file format up to 10 GB</div>
             </div>
           </div>
 
-          <!-- Waiting & Transferring State -->
+          <!-- Step 2: Transferring & Code -->
           <div id="sender-step-transfer" class="hidden">
-            <div class="file-badge">
+            <div class="file-info-badge">
               <span class="file-name" id="send-file-name">-</span>
               <span class="file-size" id="send-file-size">-</span>
             </div>
 
-            <div class="code-box">
-              <span class="code-label">Share this code with receiver</span>
-              <div class="code-display" id="sender-code-display">----</div>
+            <div class="code-container">
+              <div class="code-label">Receiver Code</div>
+              <div class="code-number" id="sender-code-display">----</div>
               <button type="button" class="btn-copy" id="btn-copy-code">Copy Code</button>
             </div>
 
-            <div class="status-box">
-              <div class="status-indicator">
-                <span class="pulse-dot" id="sender-status-dot"></span>
-                <span class="status-text" id="sender-status-text">Waiting for receiver to connect...</span>
-              </div>
-              <p class="status-sub" id="sender-status-sub">Transfer will begin automatically once receiver connects</p>
+            <div class="status-badge" id="sender-status-badge">
+              <span class="status-dot" id="sender-status-dot"></span>
+              <span id="sender-status-text">Waiting for receiver to connect...</span>
             </div>
 
-            <div class="progress-container hidden" id="sender-progress-box">
-              <div class="progress-bar">
+            <!-- Detailed Progress -->
+            <div class="progress-card hidden" id="sender-progress-box">
+              <div class="progress-track">
                 <div class="progress-fill" id="sender-progress-fill" style="width: 0%"></div>
               </div>
-              <div class="stats-row">
-                <span class="stat-pct" id="sender-progress-pct">0%</span>
-                <span class="stat-speed" id="sender-speed">0.0 MB/s</span>
+              <div class="stats-grid">
+                <div class="stat-item">
+                  <span class="stat-label">Progress</span>
+                  <span class="stat-val" id="sender-progress-pct">0%</span>
+                </div>
+                <div class="stat-item">
+                  <span class="stat-label">Speed</span>
+                  <span class="stat-val" id="sender-speed">0.0 MB/s</span>
+                </div>
+                <div class="stat-item">
+                  <span class="stat-label">ETA</span>
+                  <span class="stat-val" id="sender-eta">--</span>
+                </div>
               </div>
-              <div class="stats-row sub-row">
-                <span id="sender-progress-details">0 / 0 MB</span>
-                <span id="sender-chunk-details">Chunk 0/0</span>
+              <div class="sub-stats-row">
+                <span id="sender-progress-bytes">0 B / 0 B</span>
+                <span id="sender-progress-chunks">Chunk 0/0</span>
               </div>
             </div>
 
-            <button type="button" class="btn btn-primary hidden" id="btn-resume-send" style="margin-top: 12px;">Resume Transfer</button>
+            <!-- Active Transfer Controls: Pause, Resume, Cancel -->
+            <div class="btn-group hidden" id="sender-active-controls">
+              <button type="button" class="btn btn-warning" id="btn-pause-send">Pause</button>
+              <button type="button" class="btn btn-primary hidden" id="btn-resume-send">Resume</button>
+              <button type="button" class="btn btn-danger" id="btn-cancel-send">Cancel</button>
+            </div>
+
             <button type="button" class="btn btn-secondary hidden" id="btn-send-again">Send Another File</button>
           </div>
 
-          <button type="button" class="btn-back" id="btn-back-from-send">← Back</button>
+          <button type="button" class="btn-link" id="btn-back-from-send">← Back to Menu</button>
         </div>
-      </div>
+      </section>
 
-      <!-- 3. RECEIVER SCREEN -->
-      <div class="view hidden" id="view-receive">
+      <!-- 3. RECEIVER VIEW -->
+      <section class="view hidden" id="view-receive">
         <div class="card">
-          <!-- Input Code Step -->
+          <!-- Step 1: Input Code -->
           <div id="receiver-step-input">
-            <label for="receive-code-input" class="input-label">Enter 4-digit code</label>
-            <input type="text" id="receive-code-input" class="code-input" placeholder="e.g. 7492" maxlength="8" autocomplete="off" autofocus>
-            <button type="button" class="btn btn-primary" id="btn-start-receive">Receive File</button>
+            <label for="receive-code-input" class="input-label">Enter 4-digit transfer code</label>
+            <input type="text" id="receive-code-input" class="code-input" placeholder="e.g. 4821" maxlength="6" autocomplete="off" autofocus>
+            <button type="button" class="btn btn-primary" id="btn-start-receive">Connect & Receive</button>
           </div>
 
-          <!-- Receiving State -->
+          <!-- Step 2: Receiving -->
           <div id="receiver-step-transfer" class="hidden">
-            <div class="file-badge">
+            <div class="file-info-badge">
               <span class="file-name" id="rx-file-name">Connecting...</span>
               <span class="file-size" id="rx-file-size">-</span>
             </div>
 
-            <div class="status-box">
-              <div class="status-indicator">
-                <span class="pulse-dot green" id="rx-status-dot"></span>
-                <span class="status-text" id="rx-status-text">Connecting to sender...</span>
-              </div>
-              <p class="status-sub" id="rx-status-sub">Connecting to peer...</p>
+            <div class="status-badge" id="rx-status-badge">
+              <span class="status-dot green" id="rx-status-dot"></span>
+              <span id="rx-status-text">Connecting to sender...</span>
             </div>
 
-            <!-- In-Flight Transfer Progress & Speed -->
-            <div class="progress-container" id="rx-progress-box">
-              <div class="progress-bar">
+            <!-- Detailed Progress -->
+            <div class="progress-card" id="rx-progress-box">
+              <div class="progress-track">
                 <div class="progress-fill green-fill" id="rx-progress-fill" style="width: 0%"></div>
               </div>
-              <div class="stats-row">
-                <span class="stat-pct" id="rx-progress-pct">0%</span>
-                <span class="stat-speed" id="rx-speed">0.0 MB/s</span>
+              <div class="stats-grid">
+                <div class="stat-item">
+                  <span class="stat-label">Progress</span>
+                  <span class="stat-val" id="rx-progress-pct">0%</span>
+                </div>
+                <div class="stat-item">
+                  <span class="stat-label">Speed</span>
+                  <span class="stat-val" id="rx-speed">0.0 MB/s</span>
+                </div>
+                <div class="stat-item">
+                  <span class="stat-label">ETA</span>
+                  <span class="stat-val" id="rx-eta">--</span>
+                </div>
               </div>
-              <div class="stats-row sub-row">
-                <span id="rx-progress-details">-</span>
-                <span id="rx-chunk-details">Chunk 0/0</span>
+              <div class="sub-stats-row">
+                <span id="rx-progress-bytes">0 B / 0 B</span>
+                <span id="rx-progress-chunks">Chunk 0/0</span>
               </div>
             </div>
 
-            <!-- Ready To Download Step: Only downloaded when clicked! -->
-            <div id="rx-download-ready-box" class="download-ready-box hidden">
+            <!-- Active Receiver Controls: Cancel -->
+            <div class="btn-group" id="rx-active-controls">
+              <button type="button" class="btn btn-danger" id="btn-cancel-receive">Cancel</button>
+            </div>
+
+            <div id="rx-download-ready-box" class="hidden">
               <button type="button" class="btn btn-primary btn-large" id="btn-trigger-download">
-                Click here to download
+                Download File
               </button>
             </div>
 
-            <!-- Cleared / Done State -->
-            <div id="rx-cleared-box" class="status-box hidden">
-              <div class="status-text" style="color: var(--accent-green);">✓ File downloaded to your browser!</div>
+            <div id="rx-cleared-box" class="hidden">
+              <div class="success-message" id="rx-status-finished">✓ File ready</div>
               <button type="button" class="btn btn-secondary" id="btn-receive-again">Receive Another File</button>
             </div>
           </div>
 
-          <button type="button" class="btn-back" id="btn-back-from-receive">← Back</button>
+          <button type="button" class="btn-link" id="btn-back-from-receive">← Back to Menu</button>
         </div>
-      </div>
+      </section>
     </main>
   </div>
 

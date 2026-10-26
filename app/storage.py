@@ -1,14 +1,12 @@
 import asyncio
 import hashlib
-import json
 import logging
 import os
-import re
 import shutil
 import sqlite3
 import threading
 from datetime import datetime, timezone, timedelta
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger("chunkstream.storage")
 
@@ -17,7 +15,6 @@ DB_PATH = os.path.join(DATA_DIR, "chunkstream.db")
 CHUNKS_DIR = os.path.join(DATA_DIR, "chunks")
 DOWNLOADS_DIR = os.path.join(DATA_DIR, "downloads")
 
-# Mutex dictionary to serialize concurrent assembly calls per transfer_id
 _assembly_locks: Dict[str, threading.Lock] = {}
 _assembly_locks_guard = threading.Lock()
 
@@ -35,21 +32,19 @@ def sanitize_filename(filename: str) -> str:
         return "unnamed_transfer.bin"
     base = os.path.basename(filename.strip())
     base = "".join(c for c in base if ord(c) >= 32 and c != 127)
-    for bad in ("/", "\\", ":", "*", "?", '"' , "<", ">", "|"):
+    for bad in ("/", "\\", ":", "*", "?", '"', "<", ">", "|"):
         base = base.replace(bad, "_")
     clean = base.strip(" .")
     return clean or "unnamed_transfer.bin"
 
+
 def get_db_connection() -> sqlite3.Connection:
-    """
-    Returns a configured SQLite connection with WAL mode, busy timeout,
-    and foreign keys enabled to maximize concurrency and reliability.
-    """
-    conn = sqlite3.connect(DB_PATH, timeout=30.0, check_same_thread=False)
+    """Configures SQLite connection with WAL mode and fast busy timeout."""
+    conn = sqlite3.connect(DB_PATH, timeout=15.0, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode = WAL;")
     conn.execute("PRAGMA synchronous = NORMAL;")
-    conn.execute("PRAGMA busy_timeout = 30000;")
+    conn.execute("PRAGMA busy_timeout = 15000;")
     conn.execute("PRAGMA foreign_keys = ON;")
     return conn
 
@@ -87,17 +82,23 @@ def init_db() -> None:
                 FOREIGN KEY (transfer_id) REFERENCES transfers (id) ON DELETE CASCADE
             )
         """)
-        cursor.execute("""
-            CREATE INDEX IF NOT EXISTS idx_chunks_transfer ON chunks (transfer_id, chunk_index);
-        """)
-        cursor.execute("""
-            CREATE INDEX IF NOT EXISTS idx_transfers_created ON transfers (created_at);
-        """)
-        cursor.execute("""
-            CREATE INDEX IF NOT EXISTS idx_transfers_status ON transfers (status);
-        """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_chunks_transfer ON chunks (transfer_id, chunk_index);")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_transfers_created ON transfers (created_at);")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_transfers_status ON transfers (status);")
         conn.commit()
-    logger.info("Storage initialized (DB: %s, Chunks: %s)", DB_PATH, CHUNKS_DIR)
+
+
+def check_storage_health() -> bool:
+    """Authenticates database connectivity and disk write capacity."""
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT 1")
+            cursor.fetchone()
+        return True
+    except Exception as exc:
+        logger.error("Storage health check failure: %s", exc)
+        return False
 
 
 def create_transfer(
@@ -134,17 +135,7 @@ def create_transfer(
         )
         conn.commit()
 
-    transfer_chunks_dir = os.path.join(CHUNKS_DIR, transfer_id)
-    os.makedirs(transfer_chunks_dir, exist_ok=True)
-
-    logger.info(
-        "Created transfer %s: file='%s' (%d bytes, %d chunks @ %d bytes)",
-        transfer_id,
-        safe_filename,
-        filesize,
-        total_chunks,
-        chunk_size,
-    )
+    os.makedirs(os.path.join(CHUNKS_DIR, transfer_id), exist_ok=True)
     return get_transfer(transfer_id)  # type: ignore
 
 
@@ -158,7 +149,6 @@ def get_transfer(transfer_id: str) -> Optional[Dict[str, Any]]:
             return None
 
         transfer = dict(row)
-
         cursor.execute(
             "SELECT chunk_index FROM chunks WHERE transfer_id = ? ORDER BY chunk_index ASC",
             (transfer_id,),
@@ -173,17 +163,12 @@ def get_transfer(transfer_id: str) -> Optional[Dict[str, Any]]:
         )
 
         all_indices = set(range(transfer["total_chunks"]))
-        missing = sorted(list(all_indices - set(acked)))
-        transfer["missing_chunks"] = missing
-
+        transfer["missing_chunks"] = sorted(list(all_indices - set(acked)))
         return transfer
 
 
-def list_transfers(limit: int = 50, summary_only: bool = True) -> List[Dict[str, Any]]:
-    """
-    Lists recent transfers.
-    Uses an optimized single SQL query with count subquery rather than N+1 queries.
-    """
+def list_transfers(limit: int = 30) -> List[Dict[str, Any]]:
+    """Lists recent transfers with progress summaries in a single indexed query."""
     with get_db_connection() as conn:
         cursor = conn.cursor()
         query = """
@@ -218,7 +203,6 @@ def update_transfer_status(transfer_id: str, status: str) -> None:
             (status, now, transfer_id),
         )
         conn.commit()
-    logger.info("Transfer %s status updated to: %s", transfer_id, status)
 
 
 def save_chunk(
@@ -229,14 +213,11 @@ def save_chunk(
 ) -> Tuple[bool, str]:
     """
     Saves a chunk to disk and registers it in SQLite.
-    Optimized: Avoids N+1 full get_transfer query and provides idempotency checks.
-    Returns (success, message).
+    Includes bounds checking, checksum verification, and idempotency.
     """
     calc_checksum = hashlib.sha256(data).hexdigest()
     if expected_checksum and expected_checksum.lower() != calc_checksum.lower():
-        msg = f"Checksum mismatch for chunk {chunk_index}: got {calc_checksum[:8]}, expected {expected_checksum[:8]}"
-        logger.warning(msg)
-        return False, msg
+        return False, f"Checksum mismatch for chunk {chunk_index}"
 
     with get_db_connection() as conn:
         cursor = conn.cursor()
@@ -247,16 +228,15 @@ def save_chunk(
 
         total_chunks = row["total_chunks"]
         if chunk_index < 0 or chunk_index >= total_chunks:
-            return False, f"Chunk index {chunk_index} out of bounds (0-{total_chunks - 1})"
+            return False, f"Chunk index {chunk_index} out of bounds"
 
-        # Idempotency check: if chunk is already stored with identical checksum and size
         cursor.execute(
             "SELECT size, checksum FROM chunks WHERE transfer_id = ? AND chunk_index = ?",
             (transfer_id, chunk_index),
         )
         existing = cursor.fetchone()
         if existing and existing["size"] == len(data) and (existing["checksum"] or "").lower() == calc_checksum.lower():
-            return True, "Chunk already recorded (idempotent)"
+            return True, "Chunk already recorded"
 
     transfer_chunks_dir = os.path.join(CHUNKS_DIR, transfer_id)
     os.makedirs(transfer_chunks_dir, exist_ok=True)
@@ -277,13 +257,6 @@ def save_chunk(
         )
         conn.commit()
 
-    logger.debug(
-        "Saved chunk %d for transfer %s (%d bytes, sha256=%s)",
-        chunk_index,
-        transfer_id,
-        len(data),
-        calc_checksum[:8],
-    )
     return True, "Chunk saved successfully"
 
 
@@ -298,10 +271,8 @@ def get_chunk(transfer_id: str, chunk_index: int) -> Optional[bytes]:
 
 def assemble_file(transfer_id: str) -> Tuple[bool, Optional[str], Optional[str]]:
     """
-    Reassembles all chunks in sequential order into a complete file.
-    Guarded with per-transfer mutex to avoid concurrent race conditions.
-    Validates destination path against path traversal attacks.
-    Returns (success, assembled_path, error_message).
+    Reassembles all chunks into a complete file.
+    Immediately cleans up intermediate chunk files to conserve disk on free servers.
     """
     lock = _get_assembly_lock(transfer_id)
     with lock:
@@ -310,24 +281,19 @@ def assemble_file(transfer_id: str) -> Tuple[bool, Optional[str], Optional[str]]
             return False, None, f"Transfer {transfer_id} not found"
 
         if len(transfer["missing_chunks"]) > 0:
-            return (
-                False,
-                None,
-                f"Cannot assemble file: missing chunks {transfer['missing_chunks'][:10]} (total missing: {len(transfer['missing_chunks'])})",
-            )
+            return False, None, f"Cannot assemble file: missing {len(transfer['missing_chunks'])} chunks"
 
         safe_name = sanitize_filename(transfer["filename"])
         out_dir = os.path.join(DOWNLOADS_DIR, transfer_id)
         os.makedirs(out_dir, exist_ok=True)
         out_path = os.path.join(out_dir, safe_name)
 
-        # Ensure path does not escape destination directory
+        # Path traversal guard
         abs_out_dir = os.path.abspath(out_dir)
         abs_out_path = os.path.abspath(out_path)
         if not abs_out_path.startswith(abs_out_dir + os.sep) and abs_out_path != abs_out_dir:
-            return False, None, "Path traversal detected in transfer filename"
+            return False, None, "Path traversal detected"
 
-        # If already assembled successfully and matches checksum, return early
         if transfer.get("status") == "completed" and os.path.isfile(out_path):
             return True, out_path, None
 
@@ -338,77 +304,73 @@ def assemble_file(transfer_id: str) -> Tuple[bool, Optional[str], Optional[str]]
             for idx in range(transfer["total_chunks"]):
                 chunk_data = get_chunk(transfer_id, idx)
                 if chunk_data is None:
-                    return False, None, f"Missing chunk file on disk for index {idx}"
+                    return False, None, f"Missing chunk {idx} on disk"
                 out_f.write(chunk_data)
                 sha.update(chunk_data)
                 total_written += len(chunk_data)
 
         calc_hash = sha.hexdigest()
         if transfer["checksum"] and transfer["checksum"].lower() != calc_hash.lower():
-            msg = f"Assembled file checksum mismatch: got {calc_hash}, expected {transfer['checksum']}"
-            logger.error(msg)
             try:
                 os.remove(out_path)
             except OSError:
                 pass
-            return False, None, msg
+            return False, None, f"Checksum mismatch: expected {transfer['checksum']}, got {calc_hash}"
 
         update_transfer_status(transfer_id, "completed")
-        logger.info(
-            "Successfully assembled transfer %s -> %s (%d bytes, sha256=%s)",
-            transfer_id,
-            out_path,
-            total_written,
-            calc_hash[:8],
-        )
+
+        # Free tier optimization: immediately reclaim chunk disk space!
+        cleanup_transfer_chunks(transfer_id)
+
+        logger.info("Assembled transfer %s -> %s (%d bytes)", transfer_id, out_path, total_written)
         return True, out_path, None
 
 
 async def assemble_file_async(transfer_id: str) -> Tuple[bool, Optional[str], Optional[str]]:
-    """Asynchronously reassembles file in a thread pool without blocking the event loop."""
     return await asyncio.to_thread(assemble_file, transfer_id)
 
 
-def cleanup_expired_transfers(max_age_hours: int = 24) -> int:
-    """
-    Deletes stale/expired transfers and associated chunk files from disk and SQLite.
-    Returns the count of cleaned up transfers.
-    """
-    cutoff = (datetime.now(timezone.utc) - timedelta(hours=max_age_hours)).isoformat()
-    cleaned_count = 0
-    with get_db_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute(
-            "SELECT id FROM transfers WHERE updated_at < ?",
-            (cutoff,),
-        )
-        expired_ids = [r["id"] for r in cursor.fetchall()]
-
-        for tid in expired_ids:
-            # Remove chunk files
-            chunk_dir = os.path.join(CHUNKS_DIR, tid)
-            if os.path.isdir(chunk_dir):
-                shutil.rmtree(chunk_dir, ignore_errors=True)
-            # Remove assembled files
-            dl_dir = os.path.join(DOWNLOADS_DIR, tid)
-            if os.path.isdir(dl_dir):
-                shutil.rmtree(dl_dir, ignore_errors=True)
-            # Remove from DB
-            cursor.execute("DELETE FROM transfers WHERE id = ?", (tid,))
-            cleaned_count += 1
-
-        conn.commit()
-
-    if cleaned_count > 0:
-        logger.info("Cleaned up %d expired transfers older than %d hours", cleaned_count, max_age_hours)
-    return cleaned_count
-
-
 def cleanup_transfer_chunks(transfer_id: str) -> bool:
-    """Cleans up individual .part chunk files after successful assembly to reclaim disk."""
+    """Deletes individual .part files after assembly to reclaim disk."""
     chunk_dir = os.path.join(CHUNKS_DIR, transfer_id)
     if os.path.isdir(chunk_dir):
         shutil.rmtree(chunk_dir, ignore_errors=True)
-        logger.info("Reclaimed chunk disk space for completed transfer %s", transfer_id)
         return True
     return False
+
+
+def delete_transfer(transfer_id: str) -> bool:
+    """Completely removes a transfer, its chunks, and its assembled file."""
+    chunk_dir = os.path.join(CHUNKS_DIR, transfer_id)
+    dl_dir = os.path.join(DOWNLOADS_DIR, transfer_id)
+    shutil.rmtree(chunk_dir, ignore_errors=True)
+    shutil.rmtree(dl_dir, ignore_errors=True)
+
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM transfers WHERE id = ?", (transfer_id,))
+        deleted = cursor.rowcount > 0
+        conn.commit()
+
+    with _assembly_locks_guard:
+        _assembly_locks.pop(transfer_id, None)
+
+    return deleted
+
+
+def cleanup_expired_transfers(max_age_hours: int = 1) -> int:
+    """Deletes stale/expired transfers from disk and DB (default: 1 hour retention)."""
+    cutoff = (datetime.now(timezone.utc) - timedelta(hours=max_age_hours)).isoformat()
+    cleaned = 0
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT id FROM transfers WHERE updated_at < ?", (cutoff,))
+        expired_ids = [r["id"] for r in cursor.fetchall()]
+
+    for tid in expired_ids:
+        if delete_transfer(tid):
+            cleaned += 1
+
+    if cleaned > 0:
+        logger.info("Cleaned up %d expired transfer(s) older than %d hour(s)", cleaned, max_age_hours)
+    return cleaned
