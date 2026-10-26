@@ -102,6 +102,7 @@ let totalChunks = 0;
 let ackedChunks = new Set();
 let inFlightChunks = new Set();
 let inFlightTimestamps = new Map();
+let pipelineWatchdog = null;
 let bytesSent = 0;
 let senderStartTime = 0;
 
@@ -411,6 +412,14 @@ async function handleFileSelected(file) {
   sendFileSize.textContent = formatBytes(file.size);
   senderCodeDisplay.textContent = currentCode;
 
+  // Initialize progress counters immediately so user sees "0 B / 300 MB" and "Chunk 0/1200"
+  senderProgressFill.style.width = '0%';
+  senderProgressPct.textContent = '0%';
+  senderSpeed.textContent = '0.0 MB/s';
+  senderEta.textContent = '--';
+  senderProgressBytes.textContent = `0 B / ${formatBytes(file.size)}`;
+  senderProgressChunks.textContent = `Chunk 0/${totalChunks}`;
+
   senderStepPick.classList.add('hidden');
   senderStepTransfer.classList.remove('hidden');
   senderStatusText.textContent = 'Waiting for receiver to connect...';
@@ -464,25 +473,51 @@ function connectSenderWebSocket() {
           startStreamingChunks();
         }
       } else if (msg.type === 'peer_info') {
-        if (msg.role === 'receiver') {
+        if (msg.role === 'receiver' || msg.role === 'rx') {
           handlePeerInfo('sender', msg);
+          if (!isPaused && !isStreaming && currentFile) {
+            startStreamingChunks();
+          }
         }
-      } else if (msg.type === 'chunk_ack') {
+      } else if (msg.type === 'chunk_ack' || msg.type === 'rx_ack') {
         handleChunkAck(msg.index);
+      } else if (msg.type === 'peer_disconnected') {
+        if (msg.role === 'receiver') {
+          isPaused = true;
+          if (pipelineWatchdog) {
+            clearInterval(pipelineWatchdog);
+            pipelineWatchdog = null;
+          }
+          senderStatusDot.className = 'status-dot';
+          senderStatusText.textContent = 'Receiver disconnected. Transfer paused waiting for reconnect...';
+          btnPauseSend.classList.add('hidden');
+          btnResumeSend.classList.remove('hidden');
+          if (senderPeerPill) senderPeerPill.classList.add('hidden');
+        }
       } else if (msg.type === 'request_missing') {
         if (!isPaused) startStreamingChunks(msg.missing_chunks);
-      } else if (msg.type === 'paused') {
+      } else if (msg.type === 'peer_paused' || msg.type === 'paused') {
         isPaused = true;
+        if (pipelineWatchdog) {
+          clearInterval(pipelineWatchdog);
+          pipelineWatchdog = null;
+        }
         senderStatusDot.className = 'status-dot';
         senderStatusText.textContent = 'Transfer paused';
-      } else if (msg.type === 'resumed') {
+        btnPauseSend.classList.add('hidden');
+        btnResumeSend.classList.remove('hidden');
+      } else if (msg.type === 'peer_resumed' || msg.type === 'resumed') {
         isPaused = false;
         senderStatusDot.className = 'status-dot green';
         senderStatusText.textContent = 'Streaming directly to receiver...';
+        btnResumeSend.classList.add('hidden');
+        btnPauseSend.classList.remove('hidden');
         startStreamingChunks();
-      } else if (msg.type === 'transfer_cancelled') {
-        alert('Transfer was cancelled by receiver.');
-        resetSender();
+      } else if (msg.type === 'transfer_cancelled' || msg.type === 'peer_cancelled') {
+        if (msg.role !== 'sender') {
+          alert('Transfer was cancelled by receiver.');
+          resetSender();
+        }
       } else if (msg.type === 'ping') {
         if (senderWs && senderWs.readyState === WebSocket.OPEN) {
           senderWs.send(JSON.stringify({ type: 'pong', client_ts: msg.client_ts }));
@@ -534,57 +569,95 @@ function handlePeerInfo(role, msg) {
   if (peerPill) peerPill.classList.remove('hidden');
 }
 
+// Maximum chunks simultaneously in flight
+const MAX_IN_FLIGHT = 6;
+
+async function pumpPipeline() {
+  if (isPaused || !isStreaming || !senderWs || senderWs.readyState !== WebSocket.OPEN || !currentFile) return;
+
+  while (inFlightChunks.size < MAX_IN_FLIGHT && (ackedChunks.size + inFlightChunks.size) < totalChunks) {
+    let nextIdx = -1;
+    for (let i = 0; i < totalChunks; i++) {
+      if (!ackedChunks.has(i) && !inFlightChunks.has(i)) {
+        nextIdx = i;
+        break;
+      }
+    }
+    if (nextIdx === -1) break;
+
+    inFlightChunks.add(nextIdx);
+    inFlightTimestamps.set(nextIdx, Date.now());
+
+    const start = nextIdx * chunkSize;
+    const end = Math.min(start + chunkSize, currentFile.size);
+    const slice = currentFile.slice(start, end);
+
+    try {
+      const buf = await slice.arrayBuffer();
+      if (!isStreaming || isPaused || !senderWs || senderWs.readyState !== WebSocket.OPEN) {
+        inFlightChunks.delete(nextIdx);
+        inFlightTimestamps.delete(nextIdx);
+        break;
+      }
+      const b64 = arrayBufferToBase64(buf);
+      senderWs.send(JSON.stringify({
+        type: 'chunk',
+        index: nextIdx,
+        data: b64,
+        total: totalChunks,
+      }));
+    } catch (err) {
+      console.error('Slice read error at chunk', nextIdx, err);
+      inFlightChunks.delete(nextIdx);
+      inFlightTimestamps.delete(nextIdx);
+      break;
+    }
+  }
+}
+
 async function startStreamingChunks(specificIndices = null) {
   if (!currentFile || !senderWs || senderWs.readyState !== WebSocket.OPEN) return;
 
   isStreaming = true;
   isPaused = false;
-  senderStartTime = Date.now();
+  if (senderStartTime === 0) senderStartTime = Date.now();
   senderStatusDot.className = 'status-dot green';
   senderStatusText.textContent = 'Streaming directly to receiver...';
   senderProgressBox.classList.remove('hidden');
   senderActiveControls.classList.remove('hidden');
 
-  const indicesToStream = specificIndices || [];
-  if (!specificIndices) {
-    for (let i = 0; i < totalChunks; i++) {
-      if (!ackedChunks.has(i)) indicesToStream.push(i);
+  if (currentFile) {
+    senderProgressBytes.textContent = `${formatBytes(bytesSent)} / ${formatBytes(currentFile.size)}`;
+    senderProgressChunks.textContent = `Chunk ${ackedChunks.size}/${totalChunks}`;
+  }
+
+  if (specificIndices && specificIndices.length > 0) {
+    for (const idx of specificIndices) {
+      ackedChunks.delete(idx);
+      inFlightChunks.delete(idx);
+      inFlightTimestamps.delete(idx);
     }
   }
 
-  // Pipeline window of up to 4 chunks
-  const MAX_IN_FLIGHT = 4;
-  let cursor = 0;
-
-  async function pump() {
-    if (isPaused || !isStreaming || !senderWs || senderWs.readyState !== WebSocket.OPEN) return;
-
-    while (inFlightChunks.size < MAX_IN_FLIGHT && cursor < indicesToStream.length) {
-      const idx = indicesToStream[cursor++];
-      if (ackedChunks.has(idx)) continue;
-
-      inFlightChunks.add(idx);
-      inFlightTimestamps.set(idx, Date.now());
-
-      const start = idx * chunkSize;
-      const end = Math.min(start + chunkSize, currentFile.size);
-      const slice = currentFile.slice(start, end);
-
-      const arrayBuffer = await slice.arrayBuffer();
-      const b64 = arrayBufferToBase64(arrayBuffer);
-
-      if (senderWs && senderWs.readyState === WebSocket.OPEN) {
-        senderWs.send(JSON.stringify({
-          type: 'chunk',
-          index: idx,
-          data: b64,
-          total: totalChunks,
-        }));
+  if (!pipelineWatchdog) {
+    pipelineWatchdog = setInterval(() => {
+      if (!isStreaming || isPaused || !senderWs || senderWs.readyState !== WebSocket.OPEN) return;
+      const now = Date.now();
+      let hasTimedOut = false;
+      for (const [idx, ts] of inFlightTimestamps.entries()) {
+        if (now - ts > 2500) {
+          inFlightChunks.delete(idx);
+          inFlightTimestamps.delete(idx);
+          hasTimedOut = true;
+        }
       }
-    }
+      if (hasTimedOut || (inFlightChunks.size < MAX_IN_FLIGHT && (ackedChunks.size + inFlightChunks.size) < totalChunks)) {
+        pumpPipeline();
+      }
+    }, 1000);
   }
 
-  pump();
+  pumpPipeline();
 }
 
 function handleChunkAck(index) {
@@ -615,6 +688,10 @@ function handleChunkAck(index) {
 
   if (ackedChunks.size === totalChunks) {
     isStreaming = false;
+    if (pipelineWatchdog) {
+      clearInterval(pipelineWatchdog);
+      pipelineWatchdog = null;
+    }
     senderStatusDot.className = 'status-dot green';
     senderStatusText.textContent = 'Transfer complete! Delivered to receiver.';
     senderActiveControls.classList.add('hidden');
@@ -622,35 +699,18 @@ function handleChunkAck(index) {
     return;
   }
 
-  // Refill flight window
-  if (!isPaused && isStreaming) {
-    for (let i = 0; i < totalChunks; i++) {
-      if (!ackedChunks.has(i) && !inFlightChunks.has(i)) {
-        inFlightChunks.add(i);
-        inFlightTimestamps.set(i, Date.now());
-
-        const start = i * chunkSize;
-        const end = Math.min(start + chunkSize, currentFile.size);
-        currentFile.slice(start, end).arrayBuffer().then((buf) => {
-          if (senderWs && senderWs.readyState === WebSocket.OPEN && isStreaming && !isPaused) {
-            senderWs.send(JSON.stringify({
-              type: 'chunk',
-              index: i,
-              data: arrayBufferToBase64(buf),
-              total: totalChunks,
-            }));
-          }
-        });
-        break;
-      }
-    }
-  }
+  // Refill pipeline window
+  pumpPipeline();
 }
 
 // Pause, Resume, Cancel Controls
 btnPauseSend.addEventListener('click', () => {
   if (!isStreaming) return;
   isPaused = true;
+  if (pipelineWatchdog) {
+    clearInterval(pipelineWatchdog);
+    pipelineWatchdog = null;
+  }
   if (senderWs && senderWs.readyState === WebSocket.OPEN) {
     senderWs.send(JSON.stringify({ type: 'pause' }));
   }
@@ -679,29 +739,40 @@ btnSendAgain.addEventListener('click', () => {
   fileInput.click();
 });
 
-async function cancelTransfer() {
-  if (senderWs && senderWs.readyState === WebSocket.OPEN) {
-    senderWs.send(JSON.stringify({ type: 'cancel' }));
-    senderWs.close();
+function cancelTransfer() {
+  const codeToDelete = currentCode;
+  if (pipelineWatchdog) {
+    clearInterval(pipelineWatchdog);
+    pipelineWatchdog = null;
+  }
+  if (senderWs) {
+    if (senderWs.readyState === WebSocket.OPEN) {
+      try { senderWs.send(JSON.stringify({ type: 'cancel' })); } catch (_) {}
+    }
+    try { senderWs.close(); } catch (_) {}
     senderWs = null;
   }
-  if (currentCode) {
-    try {
-      await fetch(`/api/transfers/${currentCode}`, { method: 'DELETE' });
-    } catch (_) {}
-  }
   resetSender();
+  if (codeToDelete) {
+    fetch(`/api/transfers/${codeToDelete}`, { method: 'DELETE' }).catch(() => {});
+  }
 }
 
 function resetSender() {
+  if (pipelineWatchdog) {
+    clearInterval(pipelineWatchdog);
+    pipelineWatchdog = null;
+  }
   if (senderWs) {
-    senderWs.close();
+    try { senderWs.close(); } catch (_) {}
     senderWs = null;
   }
   currentFile = null;
   currentCode = null;
   isStreaming = false;
   isPaused = false;
+  senderStartTime = 0;
+  bytesSent = 0;
   ackedChunks.clear();
   inFlightChunks.clear();
   inFlightTimestamps.clear();
@@ -739,6 +810,8 @@ async function startReceiving() {
       rxTransferData = await res.json();
       rxFileName.textContent = rxTransferData.filename;
       rxFileSize.textContent = formatBytes(rxTransferData.filesize);
+      rxProgressBytes.textContent = `0 B / ${formatBytes(rxTransferData.filesize)}`;
+      rxProgressChunks.textContent = `Chunk 0/${rxTransferData.total_chunks}`;
     }
   } catch (_) {}
 
@@ -770,11 +843,25 @@ function connectReceiverWebSocket(code) {
         if (msg.role === 'sender') {
           handlePeerInfo('rx', msg);
         }
-      } else if (msg.type === 'chunk') {
+      } else if (msg.type === 'chunk' || msg.type === 'chunk_data') {
         await handleReceiverChunk(msg);
-      } else if (msg.type === 'transfer_cancelled') {
-        alert('Transfer was cancelled by sender.');
-        resetReceiver();
+      } else if (msg.type === 'peer_disconnected') {
+        if (msg.role === 'sender') {
+          rxStatusDot.className = 'status-dot';
+          rxStatusText.textContent = 'Sender disconnected. Waiting to reconnect...';
+          if (rxPeerPill) rxPeerPill.classList.add('hidden');
+        }
+      } else if (msg.type === 'peer_paused') {
+        rxStatusDot.className = 'status-dot';
+        rxStatusText.textContent = 'Transfer paused by sender';
+      } else if (msg.type === 'peer_resumed') {
+        rxStatusDot.className = 'status-dot green';
+        rxStatusText.textContent = 'Receiving stream from sender...';
+      } else if (msg.type === 'transfer_cancelled' || msg.type === 'peer_cancelled') {
+        if (msg.role !== 'receiver') {
+          alert('Transfer was cancelled by sender.');
+          resetReceiver();
+        }
       } else if (msg.type === 'ping') {
         if (receiverWs && receiverWs.readyState === WebSocket.OPEN) {
           receiverWs.send(JSON.stringify({ type: 'pong', client_ts: msg.client_ts }));
@@ -844,9 +931,10 @@ async function completeReceiverFile(filename, mimeType) {
   rxStatusText.textContent = 'Download complete!';
   rxActiveControls.classList.add('hidden');
 
-  // Assemble file from received chunks and trigger standard browser download
+  // Assemble file sequentially from received chunks and trigger standard browser download
+  const totalExpectedChunks = rxTransferData ? rxTransferData.total_chunks : rxReceivedIndices.size;
   const sortedChunks = [];
-  for (let i = 0; i < rxReceivedIndices.size; i++) {
+  for (let i = 0; i < totalExpectedChunks; i++) {
     if (rxChunksMap.has(i)) {
       sortedChunks.push(rxChunksMap.get(i));
     }
@@ -872,10 +960,12 @@ async function completeReceiverFile(filename, mimeType) {
 
 btnCancelReceive.addEventListener('click', cancelReceive);
 
-async function cancelReceive() {
-  if (receiverWs && receiverWs.readyState === WebSocket.OPEN) {
-    receiverWs.send(JSON.stringify({ type: 'cancel' }));
-    receiverWs.close();
+function cancelReceive() {
+  if (receiverWs) {
+    if (receiverWs.readyState === WebSocket.OPEN) {
+      try { receiverWs.send(JSON.stringify({ type: 'cancel' })); } catch (_) {}
+    }
+    try { receiverWs.close(); } catch (_) {}
     receiverWs = null;
   }
   rxChunksMap.clear();
@@ -890,7 +980,7 @@ btnReceiveAgain.addEventListener('click', () => {
 
 function resetReceiver() {
   if (receiverWs) {
-    receiverWs.close();
+    try { receiverWs.close(); } catch (_) {}
     receiverWs = null;
   }
   rxChunksMap.clear();

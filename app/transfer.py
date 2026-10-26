@@ -216,7 +216,7 @@ async def handle_websocket_message(websocket: WebSocket, raw_message: str) -> No
         return
 
     # 3. Receiver ACK: forward to sender
-    if msg_type == "rx_ack":
+    if msg_type in ("rx_ack", "chunk_ack"):
         await manager.send_to_role(transfer_id, "sender", data)
         return
 
@@ -266,6 +266,17 @@ async def handle_websocket_message(websocket: WebSocket, raw_message: str) -> No
         if chunk_index is None or chunk_data_b64 is None:
             await websocket.send_text(
                 json.dumps({"type": "error", "message": "Missing chunk index or data"})
+            )
+            return
+
+        # If receiver is not connected, notify sender and do not ACK
+        if not manager.has_role(transfer_id, "receiver"):
+            await websocket.send_text(
+                json.dumps({
+                    "type": "peer_disconnected",
+                    "role": "receiver",
+                    "message": "Receiver not connected",
+                })
             )
             return
 
