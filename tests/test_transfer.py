@@ -236,3 +236,67 @@ def test_cancel_transfer_websocket():
 
             # Session is deleted
             assert get_transfer(transfer_id) is None
+
+
+def test_network_info_endpoint():
+    """Validates the /api/network-info endpoint returns masked IP, locality, and server region."""
+    res = client.get("/api/network-info")
+    assert res.status_code == 200
+    data = res.json()
+    assert "client_ip" in data
+    assert "is_local" in data
+    assert "server_region" in data
+    assert "timestamp" in data
+    assert isinstance(data["is_local"], bool)
+
+
+def test_peer_info_and_rtt_ping_websocket():
+    """Validates peer_info broadcasting and RTT ping/pong echoing with client timestamps."""
+    transfer_id = "PROD-TELEMETRY-WS"
+    create_transfer(
+        transfer_id=transfer_id,
+        filename="telemetry_test.dat",
+        filesize=100,
+        chunk_size=50,
+        total_chunks=2,
+    )
+
+    with client.websocket_connect(f"/ws/transfer/{transfer_id}?role=receiver") as rx_ws:
+        _ = rx_ws.receive_json()
+
+        with client.websocket_connect(f"/ws/transfer/{transfer_id}?role=sender") as sender_ws:
+            _ = sender_ws.receive_json()
+            _ = rx_ws.receive_json()
+
+            # 1. Test RTT ping/pong echo
+            sender_ws.send_json({"type": "ping", "client_ts": 123456.78})
+            pong = sender_ws.receive_json()
+            assert pong["type"] == "pong"
+            assert pong["transfer_id"] == transfer_id
+            assert pong["client_ts"] == 123456.78
+            assert "server_ts" in pong
+
+            # 2. Test peer_info exchange
+            sender_ws.send_json({
+                "type": "peer_info",
+                "device": "MacBook Pro",
+                "os": "macOS",
+                "browser": "Chrome",
+                "network": "Wi-Fi (5G)",
+                "device_id": "ABC123",
+                "location": "127.0.0.1 (Local)",
+            })
+
+            # Both sender and receiver receive the broadcast peer_info
+            sender_peer_msg = sender_ws.receive_json()
+            rx_peer_msg = rx_ws.receive_json()
+
+            assert sender_peer_msg["type"] == "peer_info"
+            assert sender_peer_msg["role"] == "sender"
+            assert sender_peer_msg["device_id"] == "ABC123"
+            assert sender_peer_msg["network"] == "Wi-Fi (5G)"
+
+            assert rx_peer_msg["type"] == "peer_info"
+            assert rx_peer_msg["role"] == "sender"
+            assert rx_peer_msg["device_id"] == "ABC123"
+

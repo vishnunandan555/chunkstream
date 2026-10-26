@@ -207,6 +207,31 @@ async def get_version():
     }
 
 
+@app.get("/api/network-info", tags=["Observability"])
+async def get_network_info(request: Request):
+    """Provides client IP estimation, network classification, and relay server region."""
+    forwarded = request.headers.get("x-forwarded-for") or request.headers.get("cf-connecting-ip")
+    client_ip = forwarded.split(",")[0].strip() if forwarded else (request.client.host if request.client else "127.0.0.1")
+
+    is_local = client_ip in ("127.0.0.1", "localhost", "testclient") or client_ip.startswith(("192.168.", "10.", "172.16."))
+
+    masked_ip = client_ip
+    if not is_local and "." in client_ip:
+        parts = client_ip.split(".")
+        if len(parts) == 4:
+            masked_ip = f"{parts[0]}.{parts[1]}.{parts[2]}.xxx"
+
+    server_region = os.environ.get("SERVER_REGION") or os.environ.get("RENDER_REGION") or "Frankfurt, EU (Cloud Relay)"
+
+    return {
+        "client_ip": masked_ip,
+        "is_local": is_local,
+        "server_region": server_region,
+        "timestamp": time.time(),
+    }
+
+
+
 @app.post("/api/transfers", tags=["Transfer"])
 async def init_transfer(payload: CreateTransferRequest):
     """Initializes a new transfer session metadata."""

@@ -150,6 +150,431 @@ const rxClearedBox = document.getElementById('rx-cleared-box');
 const rxStatusFinished = document.getElementById('rx-status-finished');
 const btnReceiveAgain = document.getElementById('btn-receive-again');
 
+// Telemetry Elements - Sender
+const senderTelemetryToggle = document.getElementById('sender-telemetry-toggle');
+const senderTelemetryDrawer = document.getElementById('sender-telemetry-drawer');
+const senderTelemetryChevron = document.getElementById('sender-telemetry-chevron');
+const senderRttBadge = document.getElementById('sender-rtt-badge');
+const senderLocalIcon = document.getElementById('sender-local-icon');
+const senderLocalName = document.getElementById('sender-local-name');
+const senderLocalNet = document.getElementById('sender-local-net');
+const senderRelayRegion = document.getElementById('sender-relay-region');
+const senderPeerIcon = document.getElementById('sender-peer-icon');
+const senderPeerName = document.getElementById('sender-peer-name');
+const senderPeerNet = document.getElementById('sender-peer-net');
+const senderMyId = document.getElementById('sender-my-id');
+const senderMyInfo = document.getElementById('sender-my-info');
+const senderMyNetPill = document.getElementById('sender-my-net-pill');
+const senderPeerId = document.getElementById('sender-peer-id');
+const senderPeerInfo = document.getElementById('sender-peer-info');
+const senderPeerNetPill = document.getElementById('sender-peer-net-pill');
+const senderChunkMatrix = document.getElementById('sender-chunk-matrix');
+const senderMatrixStat = document.getElementById('sender-matrix-stat');
+const senderSparklineCanvas = document.getElementById('sender-sparkline-canvas');
+const senderSparklineVal = document.getElementById('sender-sparkline-val');
+
+// Telemetry Elements - Receiver
+const rxTelemetryToggle = document.getElementById('rx-telemetry-toggle');
+const rxTelemetryDrawer = document.getElementById('rx-telemetry-drawer');
+const rxTelemetryChevron = document.getElementById('rx-telemetry-chevron');
+const rxRttBadge = document.getElementById('rx-rtt-badge');
+const rxPeerIcon = document.getElementById('rx-peer-icon');
+const rxPeerName = document.getElementById('rx-peer-name');
+const rxPeerNet = document.getElementById('rx-peer-net');
+const rxRelayRegion = document.getElementById('rx-relay-region');
+const rxLocalIcon = document.getElementById('rx-local-icon');
+const rxLocalName = document.getElementById('rx-local-name');
+const rxLocalNet = document.getElementById('rx-local-net');
+const rxMyId = document.getElementById('rx-my-id');
+const rxMyInfo = document.getElementById('rx-my-info');
+const rxMyNetPill = document.getElementById('rx-my-net-pill');
+const rxPeerId = document.getElementById('rx-peer-id');
+const rxPeerInfo = document.getElementById('rx-peer-info');
+const rxPeerNetPill = document.getElementById('rx-peer-net-pill');
+const rxChunkMatrix = document.getElementById('rx-chunk-matrix');
+const rxMatrixStat = document.getElementById('rx-matrix-stat');
+const rxSparklineCanvas = document.getElementById('rx-sparkline-canvas');
+const rxSparklineVal = document.getElementById('rx-sparkline-val');
+
+// Telemetry State
+let senderPingTimer = null;
+let rxPingTimer = null;
+let senderSpeedHistory = [0];
+let rxSpeedHistory = [0];
+let senderCellMap = [];
+let rxCellMap = [];
+let cachedNetInfo = null;
+
+// Cookie-Based Device Identification ("device gets forgotten if cookie cleared")
+function getCookie(name) {
+  const match = document.cookie.match(new RegExp('(^|;\\s*)(' + name + ')=([^;]*)'));
+  return match ? decodeURIComponent(match[3]) : null;
+}
+
+function setCookie(name, val, days = 30) {
+  const expires = new Date(Date.now() + days * 864e5).toUTCString();
+  document.cookie = `${name}=${encodeURIComponent(val)}; expires=${expires}; path=/; SameSite=Lax`;
+}
+
+function getOrCreateDeviceId() {
+  let devId = getCookie('cs_device_id');
+  if (!devId) {
+    devId = 'DEV-' + Math.random().toString(16).substring(2, 8).toUpperCase();
+    setCookie('cs_device_id', devId, 30);
+  }
+  return devId;
+}
+
+// Professional SVG device icons
+const SVG_LAPTOP = `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect><line x1="8" y1="21" x2="16" y2="21"></line><line x1="12" y1="17" x2="12" y2="21"></line></svg>`;
+const SVG_MOBILE = `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="2" width="14" height="20" rx="2" ry="2"></rect><line x1="12" y1="18" x2="12.01" y2="18"></line></svg>`;
+
+// Client Hardware, OS, Browser & Network Detection
+function detectDeviceInfo() {
+  const ua = navigator.userAgent || '';
+  let os = 'Unknown OS';
+  if (/Macintosh|Mac OS X/i.test(ua)) os = 'macOS';
+  else if (/Windows/i.test(ua)) os = 'Windows';
+  else if (/Android/i.test(ua)) os = 'Android';
+  else if (/iPhone|iPad|iPod/i.test(ua)) os = 'iOS';
+  else if (/Linux/i.test(ua)) os = 'Linux';
+
+  let browser = 'Browser';
+  if (/Edg\//i.test(ua)) browser = 'Edge';
+  else if (/Chrome\//i.test(ua)) browser = 'Chrome';
+  else if (/Firefox\//i.test(ua)) browser = 'Firefox';
+  else if (/Safari\//i.test(ua)) browser = 'Safari';
+
+  let deviceType = 'Desktop';
+  if (/Mobile|Android|iPhone/i.test(ua)) {
+    deviceType = 'Phone';
+  } else if (/iPad|Tablet/i.test(ua)) {
+    deviceType = 'Tablet';
+  }
+
+  let netType = 'Wi-Fi / LAN';
+  const conn = navigator.connection || navigator.mozConnection || navigator.webkitConnection;
+  if (conn) {
+    if (conn.type === 'cellular') {
+      netType = `Cellular (${conn.effectiveType ? conn.effectiveType.toUpperCase() : '5G/4G'})`;
+    } else if (conn.type === 'wifi') {
+      netType = `Wi-Fi (${conn.effectiveType ? conn.effectiveType.toUpperCase() : 'High-Speed'})`;
+    } else if (conn.effectiveType) {
+      netType = conn.effectiveType.toUpperCase();
+    }
+  }
+
+  return {
+    os,
+    browser,
+    deviceType,
+    network: netType,
+  };
+}
+
+async function getNetworkInfo() {
+  if (cachedNetInfo) return cachedNetInfo;
+  try {
+    const res = await fetch('/api/network-info');
+    if (res.ok) {
+      cachedNetInfo = await res.json();
+    }
+  } catch (_) {
+    cachedNetInfo = {
+      client_ip: '127.0.0.1',
+      is_local: true,
+      server_region: 'Frankfurt, EU (Cloud Relay)',
+    };
+  }
+  return cachedNetInfo || {
+    client_ip: '127.0.0.1',
+    is_local: true,
+    server_region: 'Frankfurt, EU (Cloud Relay)',
+  };
+}
+
+async function setupLocalDeviceCard(role) {
+  const netInfo = await getNetworkInfo();
+  const dev = detectDeviceInfo();
+  const deviceId = getOrCreateDeviceId();
+
+  const localIcon = role === 'sender' ? senderLocalIcon : rxLocalIcon;
+  const localName = role === 'sender' ? senderLocalName : rxLocalName;
+  const localNet = role === 'sender' ? senderLocalNet : rxLocalNet;
+  const relayRegion = role === 'sender' ? senderRelayRegion : rxRelayRegion;
+  const myId = role === 'sender' ? senderMyId : rxMyId;
+  const myInfo = role === 'sender' ? senderMyInfo : rxMyInfo;
+  const myNetPill = role === 'sender' ? senderMyNetPill : rxMyNetPill;
+
+  if (localIcon) localIcon.innerHTML = (dev.deviceType === 'Phone' || dev.deviceType === 'Tablet') ? SVG_MOBILE : SVG_LAPTOP;
+  if (localName) localName.textContent = `${dev.browser} on ${dev.os}`;
+  if (localNet) localNet.textContent = `${dev.network} • ${netInfo.client_ip}`;
+  if (relayRegion && netInfo.server_region) relayRegion.textContent = netInfo.server_region;
+  if (myId) myId.textContent = `ID: ${deviceId}`;
+  if (myInfo) myInfo.textContent = `${dev.browser} • ${dev.os}`;
+  if (myNetPill) myNetPill.textContent = `${dev.network} • ${netInfo.is_local ? 'Local LAN' : 'WAN'}`;
+}
+
+// RTT Ping/Pong Latency
+function startRttPing(role, ws) {
+  stopRttPing(role);
+  const timer = setInterval(() => {
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({
+        type: 'ping',
+        client_ts: performance.now(),
+      }));
+    }
+  }, 2500);
+
+  if (role === 'sender') senderPingTimer = timer;
+  else rxPingTimer = timer;
+}
+
+function stopRttPing(role) {
+  if (role === 'sender' && senderPingTimer) {
+    clearInterval(senderPingTimer);
+    senderPingTimer = null;
+  } else if (role === 'rx' && rxPingTimer) {
+    clearInterval(rxPingTimer);
+    rxPingTimer = null;
+  }
+}
+
+function handlePong(role, msg) {
+  if (!msg.client_ts) return;
+  const rtt = Math.max(1, Math.round(performance.now() - msg.client_ts));
+  const badge = role === 'sender' ? senderRttBadge : rxRttBadge;
+  if (badge) {
+    badge.textContent = `RTT: ${rtt} ms`;
+  }
+}
+
+// Peer Info Exchange
+async function sendPeerInfo(role, ws) {
+  if (!ws || ws.readyState !== WebSocket.OPEN) return;
+  const netInfo = await getNetworkInfo();
+  const dev = detectDeviceInfo();
+  const deviceId = getOrCreateDeviceId();
+
+  ws.send(JSON.stringify({
+    type: 'peer_info',
+    role: role,
+    device_id: deviceId,
+    device: dev.deviceType,
+    os: dev.os,
+    browser: dev.browser,
+    network: dev.network,
+    location: netInfo ? (netInfo.client_ip + (netInfo.is_local ? ' (Local)' : ' (WAN)')) : 'Unknown',
+  }));
+}
+
+function handlePeerInfo(role, msg) {
+  const peerIcon = role === 'sender' ? senderPeerIcon : rxPeerIcon;
+  const peerName = role === 'sender' ? senderPeerName : rxPeerName;
+  const peerNet = role === 'sender' ? senderPeerNet : rxPeerNet;
+  const peerId = role === 'sender' ? senderPeerId : rxPeerId;
+  const peerInfo = role === 'sender' ? senderPeerInfo : rxPeerInfo;
+  const peerNetPill = role === 'sender' ? senderPeerNetPill : rxPeerNetPill;
+  const peerNode = role === 'sender' ? document.getElementById('sender-hop-peer') : document.getElementById('rx-hop-peer');
+
+  if (peerNode) peerNode.classList.add('active');
+  if (peerIcon) {
+    peerIcon.innerHTML = (msg.device === 'Phone' || msg.device === 'Tablet') ? SVG_MOBILE : SVG_LAPTOP;
+  }
+  if (peerName) {
+    peerName.textContent = `${msg.browser || 'Peer'} on ${msg.os || 'Device'}`;
+  }
+  if (peerNet) {
+    peerNet.textContent = msg.network || 'Connected';
+  }
+  if (peerId) {
+    peerId.textContent = `ID: ${msg.device_id || '----'}`;
+  }
+  if (peerInfo) {
+    peerInfo.textContent = `${msg.browser || 'Browser'} • ${msg.os || 'OS'}`;
+  }
+  if (peerNetPill) {
+    peerNetPill.textContent = `${msg.network || 'Network'} • ${msg.location || 'Remote'}`;
+  }
+}
+
+// Chunk Transmission Matrix
+function initChunkMatrix(role, total) {
+  const container = role === 'sender' ? senderChunkMatrix : rxChunkMatrix;
+  const footerStat = role === 'sender' ? senderMatrixStat : rxMatrixStat;
+  if (!container) return;
+
+  container.innerHTML = '';
+  const numCells = total <= 120 ? total : 100;
+  const cellMap = [];
+
+  for (let i = 0; i < numCells; i++) {
+    const cell = document.createElement('div');
+    cell.className = 'chunk-cell pending';
+    cell.title = `Chunk block ${i + 1}/${numCells}`;
+    container.appendChild(cell);
+    cellMap.push(cell);
+  }
+
+  if (role === 'sender') {
+    senderCellMap = cellMap;
+    if (footerStat) footerStat.textContent = `0 / ${total} chunks ACKed • Zero server storage`;
+  } else {
+    rxCellMap = cellMap;
+    if (footerStat) footerStat.textContent = `0 / ${total} chunks saved • Direct stream to disk`;
+  }
+}
+
+function setChunkState(role, chunkIdx, state, totalCount) {
+  const cellMap = role === 'sender' ? senderCellMap : rxCellMap;
+  if (!cellMap || cellMap.length === 0) return;
+
+  const total = totalCount || (role === 'sender' ? totalChunks : 1);
+  const cellIdx = Math.min(cellMap.length - 1, Math.floor((chunkIdx / Math.max(total, 1)) * cellMap.length));
+  const cell = cellMap[cellIdx];
+  if (cell) {
+    cell.className = `chunk-cell ${state}`;
+  }
+
+  const footerStat = role === 'sender' ? senderMatrixStat : rxMatrixStat;
+  if (footerStat) {
+    if (role === 'sender') {
+      footerStat.textContent = `${ackedChunks.size} / ${totalChunks} chunks ACKed • In-flight: ${inFlightChunks.size}`;
+    } else {
+      footerStat.textContent = `${rxReceivedIndices.size} chunks saved directly to device`;
+    }
+  }
+}
+
+function resetChunkMatrix(role) {
+  const container = role === 'sender' ? senderChunkMatrix : rxChunkMatrix;
+  if (container) container.innerHTML = '';
+  if (role === 'sender') {
+    senderCellMap = [];
+    if (senderMatrixStat) senderMatrixStat.textContent = '256 KB Chunks • Zero server storage';
+    if (senderRttBadge) senderRttBadge.textContent = 'RTT: -- ms';
+    if (senderPeerId) senderPeerId.textContent = 'ID: ----';
+    if (senderPeerInfo) senderPeerInfo.textContent = 'Waiting for peer...';
+    if (senderPeerNetPill) senderPeerNetPill.textContent = '--';
+    const peerNode = document.getElementById('sender-hop-peer');
+    if (peerNode) peerNode.classList.remove('active');
+  } else {
+    rxCellMap = [];
+    if (rxMatrixStat) rxMatrixStat.textContent = '256 KB Chunks • Direct stream to disk';
+    if (rxRttBadge) rxRttBadge.textContent = 'RTT: -- ms';
+    if (rxPeerId) rxPeerId.textContent = 'ID: ----';
+    if (rxPeerInfo) rxPeerInfo.textContent = 'Waiting for peer...';
+    if (rxPeerNetPill) rxPeerNetPill.textContent = '--';
+    const peerNode = document.getElementById('rx-hop-peer');
+    if (peerNode) peerNode.classList.remove('active');
+  }
+}
+
+// Throughput Dynamics Sparkline
+function recordSpeedSample(role, mbps) {
+  const history = role === 'sender' ? senderSpeedHistory : rxSpeedHistory;
+  history.push(mbps);
+  if (history.length > 30) {
+    history.shift();
+  }
+  const valLabel = role === 'sender' ? senderSparklineVal : rxSparklineVal;
+  if (valLabel) {
+    valLabel.textContent = `${mbps.toFixed(1)} MB/s`;
+  }
+  renderSparkline(role);
+}
+
+function renderSparkline(role) {
+  const canvas = role === 'sender' ? senderSparklineCanvas : rxSparklineCanvas;
+  if (!canvas) return;
+  const history = role === 'sender' ? senderSpeedHistory : rxSpeedHistory;
+  const dpr = window.devicePixelRatio || 1;
+  const rect = canvas.getBoundingClientRect();
+  const width = rect.width || 380;
+  const height = rect.height || 52;
+
+  if (canvas.width !== Math.round(width * dpr) || canvas.height !== Math.round(height * dpr)) {
+    canvas.width = Math.round(width * dpr);
+    canvas.height = Math.round(height * dpr);
+  }
+
+  const ctx = canvas.getContext('2d');
+  ctx.save();
+  ctx.scale(dpr, dpr);
+  ctx.clearRect(0, 0, width, height);
+
+  const samples = history.length > 0 ? history : [0];
+  const maxVal = Math.max(1.0, ...samples);
+  const strokeColor = role === 'sender' ? '#2563eb' : '#10b981';
+  const fillColorStart = role === 'sender' ? 'rgba(37, 99, 235, 0.28)' : 'rgba(16, 185, 129, 0.28)';
+  const fillColorEnd = role === 'sender' ? 'rgba(37, 99, 235, 0.0)' : 'rgba(16, 185, 129, 0.0)';
+
+  const step = width / Math.max(samples.length - 1, 1);
+
+  ctx.beginPath();
+  for (let i = 0; i < samples.length; i++) {
+    const x = i * step;
+    const y = height - (samples[i] / maxVal) * (height - 8) - 4;
+    if (i === 0) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
+  }
+
+  ctx.strokeStyle = strokeColor;
+  ctx.lineWidth = 2;
+  ctx.lineJoin = 'round';
+  ctx.stroke();
+
+  ctx.lineTo((samples.length - 1) * step, height);
+  ctx.lineTo(0, height);
+  ctx.closePath();
+  const grad = ctx.createLinearGradient(0, 0, 0, height);
+  grad.addColorStop(0, fillColorStart);
+  grad.addColorStop(1, fillColorEnd);
+  ctx.fillStyle = grad;
+  ctx.fill();
+
+  ctx.restore();
+}
+
+function resetSparkline(role) {
+  if (role === 'sender') {
+    senderSpeedHistory = [0];
+    if (senderSparklineVal) senderSparklineVal.textContent = '0.0 MB/s';
+    renderSparkline('sender');
+  } else {
+    rxSpeedHistory = [0];
+    if (rxSparklineVal) rxSparklineVal.textContent = '0.0 MB/s';
+    renderSparkline('rx');
+  }
+}
+
+// Drawer Toggle Logic
+function setupTelemetryToggles() {
+  if (senderTelemetryToggle && senderTelemetryDrawer) {
+    senderTelemetryToggle.addEventListener('click', () => {
+      const isHidden = senderTelemetryDrawer.classList.toggle('hidden');
+      if (senderTelemetryChevron) senderTelemetryChevron.classList.toggle('open', !isHidden);
+      senderTelemetryToggle.setAttribute('aria-expanded', !isHidden);
+      if (!isHidden) {
+        setTimeout(() => renderSparkline('sender'), 50);
+      }
+    });
+  }
+
+  if (rxTelemetryToggle && rxTelemetryDrawer) {
+    rxTelemetryToggle.addEventListener('click', () => {
+      const isHidden = rxTelemetryDrawer.classList.toggle('hidden');
+      if (rxTelemetryChevron) rxTelemetryChevron.classList.toggle('open', !isHidden);
+      rxTelemetryToggle.setAttribute('aria-expanded', !isHidden);
+      if (!isHidden) {
+        setTimeout(() => renderSparkline('rx'), 50);
+      }
+    });
+  }
+}
+setupTelemetryToggles();
+
 // Navigation
 function showView(view) {
   viewHome.classList.add('hidden');
@@ -248,6 +673,11 @@ async function handleFileSelected(file) {
   btnPauseSend.classList.remove('hidden');
   btnResumeSend.classList.add('hidden');
 
+  // Initialize Telemetry
+  initChunkMatrix('sender', totalChunks);
+  setupLocalDeviceCard('sender');
+  resetSparkline('sender');
+
   try {
     const res = await fetch('/api/transfers', {
       method: 'POST',
@@ -275,11 +705,23 @@ function connectSenderWebSocket() {
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
   senderWs = new WebSocket(`${protocol}//${window.location.host}/ws/transfer/${currentCode}?role=sender`);
 
+  senderWs.onopen = () => {
+    startRttPing('sender', senderWs);
+    sendPeerInfo('sender', senderWs);
+  };
+
   senderWs.onmessage = (e) => {
     try {
       const msg = JSON.parse(e.data);
       if (msg.type === 'peer_connected' && msg.role === 'receiver') {
+        sendPeerInfo('sender', senderWs);
         if (!isPaused) startStreamingChunks();
+      } else if (msg.type === 'peer_info') {
+        if (msg.role === 'receiver') {
+          handlePeerInfo('sender', msg);
+        }
+      } else if (msg.type === 'pong') {
+        handlePong('sender', msg);
       } else if (msg.type === 'request_missing') {
         if (!isPaused) startStreamingChunks(msg.missing_chunks);
       } else if (msg.type === 'chunk_ack') {
@@ -359,6 +801,7 @@ async function streamFileChunks(missingList) {
 
     inFlightChunks.add(idx);
     inFlightTimestamps.set(idx, Date.now());
+    setChunkState('sender', idx, 'inflight');
 
     const start = idx * chunkSize;
     const end = Math.min(start + chunkSize, currentFile.size);
@@ -385,6 +828,7 @@ function handleChunkAck(index) {
   inFlightTimestamps.delete(index);
   ackedChunks.add(index);
   bytesSent = Math.min(ackedChunks.size * chunkSize, currentFile.size);
+  setChunkState('sender', index, 'acked');
 
   const pct = Math.round((ackedChunks.size / totalChunks) * 100);
   senderProgressFill.style.width = `${pct}%`;
@@ -395,6 +839,7 @@ function handleChunkAck(index) {
     const speedBytesPerSec = bytesSent / elapsedSec;
     const mbps = (speedBytesPerSec / (1024 * 1024)).toFixed(1);
     senderSpeed.textContent = `${mbps} MB/s`;
+    recordSpeedSample('sender', parseFloat(mbps));
 
     const remainingBytes = currentFile.size - bytesSent;
     const etaSec = speedBytesPerSec > 0 ? remainingBytes / speedBytesPerSec : 0;
@@ -405,7 +850,7 @@ function handleChunkAck(index) {
   senderProgressChunks.textContent = `Chunk ${ackedChunks.size}/${totalChunks}`;
 
   if (ackedChunks.size === totalChunks) {
-    senderStatusText.textContent = '✓ Transfer complete!';
+    senderStatusText.textContent = 'Transfer complete';
     senderStatusDot.className = 'status-dot green';
     senderActiveControls.classList.add('hidden');
     btnSendAgain.classList.remove('hidden');
@@ -505,6 +950,9 @@ function resetSender() {
   ackedChunks.clear();
   inFlightChunks.clear();
   inFlightTimestamps.clear();
+  stopRttPing('sender');
+  resetChunkMatrix('sender');
+  resetSparkline('sender');
   senderStepPick.classList.remove('hidden');
   senderStepTransfer.classList.add('hidden');
   senderActiveControls.classList.add('hidden');
@@ -570,6 +1018,11 @@ async function startReceiving() {
     rxStartTime = Date.now();
     rxBytesReceived = 0;
 
+    // Initialize Receiver Telemetry
+    initChunkMatrix('rx', data.total_chunks);
+    setupLocalDeviceCard('rx');
+    resetSparkline('rx');
+
     connectReceiverWebSocket(code, data);
   } catch (err) {
     alert(err.message);
@@ -583,6 +1036,8 @@ function connectReceiverWebSocket(code, transferData) {
   const total = transferData.total_chunks;
 
   receiverWs.onopen = () => {
+    startRttPing('rx', receiverWs);
+    sendPeerInfo('rx', receiverWs);
     receiverWs.send(JSON.stringify({ type: 'resume_request', missing_chunks: [] }));
   };
 
@@ -595,6 +1050,13 @@ function connectReceiverWebSocket(code, transferData) {
       } else if (msg.type === 'peer_connected' && msg.role === 'sender') {
         rxStatusDot.className = 'status-dot green';
         rxStatusText.textContent = 'Receiving stream...';
+        sendPeerInfo('rx', receiverWs);
+      } else if (msg.type === 'peer_info') {
+        if (msg.role === 'sender') {
+          handlePeerInfo('rx', msg);
+        }
+      } else if (msg.type === 'pong') {
+        handlePong('rx', msg);
       } else if (msg.type === 'peer_paused') {
         rxStatusDot.className = 'status-dot';
         rxStatusText.textContent = 'Sender paused transfer';
@@ -634,6 +1096,7 @@ function connectReceiverWebSocket(code, transferData) {
 
         rxReceivedIndices.add(msg.index);
         rxBytesReceived += chunkBytes.length;
+        setChunkState('rx', msg.index, 'acked', total);
 
         const pct = Math.round((rxReceivedIndices.size / total) * 100);
         rxProgressFill.style.width = `${pct}%`;
@@ -644,6 +1107,7 @@ function connectReceiverWebSocket(code, transferData) {
           const speedBytesPerSec = rxBytesReceived / elapsedSec;
           const mbps = (speedBytesPerSec / (1024 * 1024)).toFixed(1);
           rxSpeed.textContent = `${mbps} MB/s`;
+          recordSpeedSample('rx', parseFloat(mbps));
 
           const remainingBytes = transferData.filesize - rxBytesReceived;
           const etaSec = speedBytesPerSec > 0 ? remainingBytes / speedBytesPerSec : 0;
@@ -666,7 +1130,7 @@ function connectReceiverWebSocket(code, transferData) {
 }
 
 async function completeReceiverFile(filename, mimeType) {
-  rxStatusText.textContent = '✓ Transfer complete!';
+  rxStatusText.textContent = 'Transfer complete';
   rxStatusDot.className = 'status-dot green';
   rxProgressFill.style.width = '100%';
   rxProgressPct.textContent = '100%';
@@ -681,7 +1145,7 @@ async function completeReceiverFile(filename, mimeType) {
       console.error('Error closing file stream:', closeErr);
     }
     rxWritableStream = null;
-    rxStatusFinished.textContent = '✓ File saved directly to your device!';
+    rxStatusFinished.textContent = 'File saved directly to your device.';
   } else if (rxChunksMap.size > 0) {
     // Fallback: assemble Blob in memory and trigger download
     const sortedChunks = [];
@@ -700,7 +1164,7 @@ async function completeReceiverFile(filename, mimeType) {
     document.body.removeChild(tempLink);
     URL.revokeObjectURL(url);
     rxChunksMap.clear();
-    rxStatusFinished.textContent = '✓ File downloaded to your browser!';
+    rxStatusFinished.textContent = 'File downloaded to your browser.';
   }
 
   rxClearedBox.classList.remove('hidden');
@@ -739,6 +1203,9 @@ function resetReceiver() {
   }
   rxChunksMap.clear();
   rxReceivedIndices.clear();
+  stopRttPing('rx');
+  resetChunkMatrix('rx');
+  resetSparkline('rx');
   receiveCodeInput.value = '';
   receiverStepInput.classList.remove('hidden');
   receiverStepTransfer.classList.add('hidden');

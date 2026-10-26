@@ -183,7 +183,11 @@ body {
 }
 
 .banner-icon {
-  font-size: 1.1rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--primary);
+  flex-shrink: 0;
 }
 
 /* Cards */
@@ -521,6 +525,355 @@ body {
 
 .hidden-input, .hidden {
   display: none !important;
+}
+
+/* ==========================================================================
+   Advanced Telemetry Drawer & Components
+   ========================================================================== */
+.telemetry-section {
+  margin-top: 12px;
+  width: 100%;
+  border-top: 1px dashed var(--border);
+  padding-top: 10px;
+}
+
+.telemetry-toggle-btn {
+  background: var(--box-bg);
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  border-radius: 8px;
+  width: 100%;
+  padding: 8px 12px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 0.8rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  font-family: inherit;
+}
+
+.telemetry-toggle-btn:hover {
+  border-color: var(--primary);
+  color: var(--text-main);
+}
+
+.telemetry-btn-left {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-main);
+}
+
+.telemetry-chevron {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: transform 0.2s ease;
+  color: var(--text-sub);
+}
+
+.telemetry-chevron.open {
+  transform: rotate(180deg);
+}
+
+.telemetry-drawer {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 10px;
+  animation: slideDown 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes slideDown {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.telemetry-card {
+  background: var(--box-bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.telemetry-card-hdr {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-sub);
+  font-weight: 600;
+}
+
+.rtt-badge {
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  background: rgba(37, 99, 235, 0.12);
+  color: var(--primary);
+  border: 1px solid rgba(37, 99, 235, 0.3);
+  border-radius: 4px;
+  padding: 1px 6px;
+}
+
+/* Connection Topology & Animated Hops */
+.topology-hops {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 4px 2px 4px;
+}
+
+.hop-node {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  width: 82px;
+  min-width: 0;
+}
+
+.hop-icon {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+  margin-bottom: 4px;
+  transition: all 0.2s ease;
+}
+
+.hop-node.active .hop-icon {
+  border-color: var(--primary);
+  color: var(--primary);
+  box-shadow: 0 0 8px rgba(37, 99, 235, 0.35);
+}
+
+.hop-node.relay .hop-icon {
+  border-color: #8b5cf6;
+  color: #8b5cf6;
+  box-shadow: 0 0 6px rgba(139, 92, 246, 0.25);
+}
+
+.hop-name {
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--text-main);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  width: 100%;
+}
+
+.hop-sub {
+  font-size: 0.64rem;
+  color: var(--text-sub);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  width: 100%;
+}
+
+.hop-link {
+  flex: 1;
+  height: 2px;
+  background: var(--border);
+  position: relative;
+  margin: 0 4px;
+  margin-bottom: 24px;
+  overflow: hidden;
+  border-radius: 1px;
+}
+
+.hop-pulse {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 40%;
+  height: 100%;
+  background: linear-gradient(90deg, transparent, var(--primary), transparent);
+  animation: hopStream 1.8s infinite linear;
+}
+
+@keyframes hopStream {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(300%);
+  }
+}
+
+/* Device Identity Cards */
+.devices-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.device-card {
+  background: var(--box-bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.device-card-hdr {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.device-role {
+  font-size: 0.68rem;
+  font-weight: 600;
+  color: var(--text-sub);
+  text-transform: uppercase;
+}
+
+.device-id-tag {
+  font-family: var(--font-mono);
+  font-size: 0.66rem;
+  color: var(--text-muted);
+  background: var(--btn-secondary-bg);
+  padding: 1px 4px;
+  border-radius: 3px;
+}
+
+.device-client-info {
+  font-size: 0.74rem;
+  font-weight: 500;
+  color: var(--text-main);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.device-network-pill {
+  font-size: 0.66rem;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Chunk Transmission Matrix */
+.chunk-matrix {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(7px, 1fr));
+  gap: 2.5px;
+  max-height: 90px;
+  overflow-y: auto;
+  padding: 2px 0;
+}
+
+.chunk-cell {
+  aspect-ratio: 1;
+  border-radius: 1.5px;
+  transition: background-color 0.12s ease;
+}
+
+.chunk-cell.pending {
+  background-color: var(--btn-secondary-bg);
+  border: 1px solid var(--border);
+}
+
+.chunk-cell.inflight {
+  background-color: #3b82f6;
+  box-shadow: 0 0 4px #3b82f6;
+  animation: chunkPulse 0.8s infinite alternate;
+}
+
+.chunk-cell.acked {
+  background-color: var(--success);
+}
+
+@keyframes chunkPulse {
+  0% {
+    opacity: 0.5;
+  }
+  100% {
+    opacity: 1;
+  }
+}
+
+.telemetry-legend {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 0.66rem;
+  text-transform: none;
+  color: var(--text-muted);
+  font-weight: normal;
+}
+
+.legend-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 1.5px;
+  margin-right: 2px;
+}
+
+.legend-dot.acked {
+  background: var(--success);
+}
+
+.legend-dot.inflight {
+  background: #3b82f6;
+}
+
+.legend-dot.pending {
+  background: var(--btn-secondary-bg);
+  border: 1px solid var(--border);
+}
+
+.chunk-matrix-footer {
+  font-size: 0.68rem;
+  color: var(--text-sub);
+  text-align: center;
+  padding-top: 2px;
+  font-family: var(--font-mono);
+}
+
+/* Throughput Dynamics Sparkline */
+.sparkline-canvas {
+  width: 100%;
+  height: 52px;
+  display: block;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.08);
+}
+
+[data-theme="light"] .sparkline-canvas {
+  background: rgba(0, 0, 0, 0.03);
+}
+
+.sparkline-val {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: var(--text-main);
+  font-weight: 600;
 }
 
 @media (max-width: 480px) {

@@ -185,12 +185,37 @@ async def handle_websocket_message(websocket: WebSocket, raw_message: str) -> No
 
     msg_type = data.get("type")
 
-    # 1. Ping / Heartbeat
+    # 1. Ping / Heartbeat (includes RTT client timestamp echo)
     if msg_type == "ping":
-        await websocket.send_text(json.dumps({"type": "pong", "transfer_id": transfer_id}))
+        await websocket.send_text(
+            json.dumps({
+                "type": "pong",
+                "transfer_id": transfer_id,
+                "client_ts": data.get("client_ts"),
+                "server_ts": time.time(),
+            })
+        )
         return
 
-    # 2. Receiver ACK: forward to sender
+    # 2. Peer Device & Network Info Exchange
+    if msg_type == "peer_info":
+        await manager.broadcast(
+            transfer_id,
+            {
+                "type": "peer_info",
+                "role": role,
+                "transfer_id": transfer_id,
+                "device": data.get("device"),
+                "os": data.get("os"),
+                "browser": data.get("browser"),
+                "network": data.get("network"),
+                "device_id": data.get("device_id"),
+                "location": data.get("location"),
+            },
+        )
+        return
+
+    # 3. Receiver ACK: forward to sender
     if msg_type == "rx_ack":
         await manager.send_to_role(transfer_id, "sender", data)
         return
