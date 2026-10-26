@@ -672,12 +672,24 @@ fileInput.addEventListener('change', (e) => {
   }
 });
 
+const defaultCopyHtml = `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg><span>Copy Code</span>`;
+const copiedHtml = `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg><span style="color:var(--success)">Copied!</span>`;
+
 btnCopyCode.addEventListener('click', () => {
   if (!currentCode) return;
   navigator.clipboard.writeText(currentCode).then(() => {
-    btnCopyCode.textContent = 'Copied!';
-    setTimeout(() => { btnCopyCode.textContent = 'Copy Code'; }, 1500);
+    btnCopyCode.innerHTML = copiedHtml;
+    setTimeout(() => { btnCopyCode.innerHTML = defaultCopyHtml; }, 1800);
   });
+});
+
+window.addEventListener('resize', () => {
+  if (senderTelemetryDrawer && !senderTelemetryDrawer.classList.contains('hidden')) {
+    renderSparkline('sender');
+  }
+  if (rxTelemetryDrawer && !rxTelemetryDrawer.classList.contains('hidden')) {
+    renderSparkline('rx');
+  }
 });
 
 // WebRTC Direct LAN Implementation
@@ -1234,6 +1246,10 @@ btnStartReceive.addEventListener('click', startReceiving);
 
 receiveCodeInput.addEventListener('keydown', (e) => {
   if (e.key === 'Enter') startReceiving();
+});
+
+receiveCodeInput.addEventListener('input', () => {
+  receiveCodeInput.value = receiveCodeInput.value.trim().toUpperCase();
 });
 
 async function startReceiving() {
