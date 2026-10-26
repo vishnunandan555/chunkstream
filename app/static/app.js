@@ -612,41 +612,57 @@ function setupTelemetryToggles() {
 }
 setupTelemetryToggles();
 
-// Navigation
+// Navigation & Segmented Tabs
 function showView(view) {
-  viewHome.classList.add('hidden');
-  viewSend.classList.add('hidden');
-  viewReceive.classList.add('hidden');
-  view.classList.remove('hidden');
+  if (viewSend) viewSend.classList.add('hidden');
+  if (viewReceive) viewReceive.classList.add('hidden');
+  if (view) view.classList.remove('hidden');
+
+  if (view === viewSend) {
+    if (btnChoiceSend) btnChoiceSend.classList.add('active');
+    if (btnChoiceReceive) btnChoiceReceive.classList.remove('active');
+  } else if (view === viewReceive) {
+    if (btnChoiceReceive) btnChoiceReceive.classList.add('active');
+    if (btnChoiceSend) btnChoiceSend.classList.remove('active');
+  }
 }
 
-homeLink.addEventListener('click', () => {
-  resetSender();
-  resetReceiver();
-  showView(viewHome);
-});
+if (homeLink) {
+  homeLink.addEventListener('click', () => {
+    resetSender();
+    resetReceiver();
+    showView(viewSend);
+  });
+}
 
-btnChoiceSend.addEventListener('click', () => {
-  resetSender();
-  showView(viewSend);
-  fileInput.click();
-});
+if (btnChoiceSend) {
+  btnChoiceSend.addEventListener('click', () => {
+    if (currentFile && isStreaming) return;
+    showView(viewSend);
+  });
+}
 
-btnChoiceReceive.addEventListener('click', () => {
-  resetReceiver();
-  showView(viewReceive);
-  setTimeout(() => receiveCodeInput.focus(), 100);
-});
+if (btnChoiceReceive) {
+  btnChoiceReceive.addEventListener('click', () => {
+    if (rxBytesReceived > 0) return;
+    showView(viewReceive);
+    setTimeout(() => receiveCodeInput.focus(), 80);
+  });
+}
 
-btnBackFromSend.addEventListener('click', () => {
-  cancelTransfer();
-  showView(viewHome);
-});
+if (btnBackFromSend) {
+  btnBackFromSend.addEventListener('click', () => {
+    cancelTransfer();
+    showView(viewSend);
+  });
+}
 
-btnBackFromReceive.addEventListener('click', () => {
-  cancelReceive();
-  showView(viewHome);
-});
+if (btnBackFromReceive) {
+  btnBackFromReceive.addEventListener('click', () => {
+    cancelReceive();
+    showView(viewSend);
+  });
+}
 
 // Sender Drag & Drop
 dropZone.addEventListener('click', () => fileInput.click());

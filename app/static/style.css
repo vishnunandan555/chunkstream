@@ -1,18 +1,18 @@
 /* ==========================================================================
-   ChunkStream - Professional Minimalist Design System
+   ChunkStream - Premium Minimalist Design System
    No AI slop gradients • Solid functional surfaces • Mobile-first ergonomics
    ========================================================================== */
 
 :root {
   /* Dark Mode Default (Obsidian & Deep Slate) */
-  --bg: #090d16;
-  --card-bg: #101623;
-  --box-bg: #161f30;
+  --bg: #080c14;
+  --card-bg: #0f172a;
+  --box-bg: #162032;
   --border: rgba(255, 255, 255, 0.08);
   --border-hover: rgba(255, 255, 255, 0.16);
-  --text-main: #f9fafb;
-  --text-muted: #9ca3af;
-  --text-sub: #6b7280;
+  --text-main: #f8fafc;
+  --text-muted: #94a3b8;
+  --text-sub: #64748b;
   
   /* Solid Functional Accents */
   --primary: #3b82f6;
@@ -28,22 +28,24 @@
   --danger-hover: #dc2626;
   --danger-tint: rgba(239, 68, 68, 0.12);
 
-  --btn-secondary-bg: #1a2336;
-  --btn-secondary-hover: #243048;
-  --shadow: 0 4px 20px -2px rgba(0, 0, 0, 0.45);
+  --btn-secondary-bg: #1e293b;
+  --btn-secondary-hover: #334155;
+  --segmented-bg: #162032;
+  --tab-active-bg: #0f172a;
+  --shadow: 0 20px 40px -15px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(255, 255, 255, 0.06);
   
-  --font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-  --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  --font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, monospace;
   --radius-sm: 8px;
   --radius-md: 12px;
-  --radius-lg: 16px;
+  --radius-lg: 18px;
 }
 
 [data-theme="light"] {
-  /* Modern Neutral Light Mode (Crisp White & Slate) */
+  /* Modern Neutral Light Mode (Crisp White & Soft Slate) */
   --bg: #f8fafc;
   --card-bg: #ffffff;
-  --box-bg: #f1f5f9;
+  --box-bg: #f8fafc;
   --border: #e2e8f0;
   --border-hover: #cbd5e1;
   --text-main: #0f172a;
@@ -65,7 +67,9 @@
 
   --btn-secondary-bg: #f1f5f9;
   --btn-secondary-hover: #e2e8f0;
-  --shadow: 0 4px 20px -2px rgba(0, 0, 0, 0.06);
+  --segmented-bg: #f1f5f9;
+  --tab-active-bg: #ffffff;
+  --shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.04), 0 8px 10px -6px rgba(0, 0, 0, 0.04), 0 0 0 1px rgba(0, 0, 0, 0.06);
 }
 
 /* Base Reset */
@@ -98,7 +102,7 @@ body {
 /* App Container Frame */
 .app-container {
   width: 100%;
-  max-width: 560px;
+  max-width: 520px;
   margin: 0 auto;
   display: flex;
   flex-direction: column;
@@ -107,7 +111,7 @@ body {
 }
 
 /* ==========================================================================
-   Header Navigation Bar
+   Top Header Navigation Bar
    ========================================================================== */
 .app-header {
   width: 100%;
@@ -122,7 +126,7 @@ body {
 }
 
 .brand-group {
-  display: flex;
+  display: inline-flex;
   align-items: center;
   gap: 10px;
   cursor: pointer;
@@ -140,33 +144,45 @@ body {
   align-items: center;
   justify-content: center;
   border: 1px solid rgba(59, 130, 246, 0.2);
+  flex-shrink: 0;
 }
 
 .logo {
-  font-size: 1.35rem;
+  font-size: 1.25rem;
   font-weight: 700;
-  letter-spacing: -0.025em;
+  letter-spacing: -0.03em;
   color: var(--text-main);
 }
 
 .p2p-badge {
-  font-size: 0.7rem;
+  font-size: 0.72rem;
   font-weight: 600;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
+  letter-spacing: 0.02em;
   color: var(--text-muted);
   background: var(--box-bg);
   border: 1px solid var(--border);
-  padding: 2px 7px;
+  padding: 3px 9px;
   border-radius: 20px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.status-live-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--success);
+  display: inline-block;
+  box-shadow: 0 0 6px var(--success);
 }
 
 .theme-btn {
   background: var(--card-bg);
   border: 1px solid var(--border);
   color: var(--text-muted);
-  width: 38px;
-  height: 38px;
+  width: 36px;
+  height: 36px;
   border-radius: var(--radius-sm);
   display: flex;
   align-items: center;
@@ -182,213 +198,82 @@ body {
   background: var(--box-bg);
 }
 
-/* Main Content Area */
+/* ==========================================================================
+   Main Content Card & Segmented Control
+   ========================================================================== */
 .app-main {
   width: 100%;
 }
 
-.view {
-  width: 100%;
-}
-
-.view.hidden {
-  display: none !important;
-}
-
-/* Card Component */
 .card.main-card {
   background: var(--card-bg);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
-  padding: 28px;
+  padding: 24px;
   box-shadow: var(--shadow);
   display: flex;
   flex-direction: column;
   gap: 20px;
 }
 
-/* ==========================================================================
-   Home View: Hero, Action Cards, Security Banner
-   ========================================================================== */
-.hero-block {
+/* Segmented Control (Send / Receive Tab Switcher) */
+.segmented-control {
   display: flex;
-  flex-direction: column;
-  gap: 6px;
-  text-align: left;
-}
-
-.hero-title {
-  font-size: 1.25rem;
-  font-weight: 700;
-  letter-spacing: -0.02em;
-  color: var(--text-main);
-}
-
-.hero-sub {
-  font-size: 0.88rem;
-  color: var(--text-muted);
-  line-height: 1.45;
-}
-
-/* Action Cards Grid */
-.actions-grid {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
-.action-card {
-  background: var(--box-bg);
+  background: var(--segmented-bg);
   border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  padding: 18px 20px;
-  display: flex;
-  align-items: center;
-  gap: 16px;
-  cursor: pointer;
-  text-align: left;
-  transition: all 0.15s ease;
-  color: var(--text-main);
-  font-family: inherit;
+  border-radius: 10px;
+  padding: 3px;
+  gap: 4px;
   width: 100%;
-  min-height: 76px;
-  touch-action: manipulation;
 }
 
-.action-card:hover {
-  border-color: var(--border-hover);
-  background: var(--card-bg);
-  transform: translateY(-1px);
-}
-
-.action-card:active {
-  transform: scale(0.99);
-}
-
-.action-icon {
-  width: 44px;
-  height: 44px;
-  min-width: 44px;
-  border-radius: var(--radius-sm);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.send-icon {
-  background: var(--primary-tint);
-  color: var(--primary);
-  border: 1px solid rgba(59, 130, 246, 0.2);
-}
-
-.receive-icon {
-  background: var(--success-tint);
-  color: var(--success);
-  border: 1px solid rgba(16, 185, 129, 0.2);
-}
-
-.action-body {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
+.tab-btn {
   flex: 1;
-}
-
-.action-title {
-  font-size: 1.02rem;
-  font-weight: 600;
-  color: var(--text-main);
-  letter-spacing: -0.01em;
-}
-
-.action-desc {
-  font-size: 0.8rem;
-  color: var(--text-muted);
-  line-height: 1.35;
-}
-
-.action-arrow {
-  color: var(--text-sub);
-  display: flex;
-  align-items: center;
-  transition: transform 0.15s ease;
-}
-
-.action-card:hover .action-arrow {
-  color: var(--text-main);
-  transform: translateX(2px);
-}
-
-/* Security Trust Banner */
-.zero-storage-banner {
-  display: flex;
-  align-items: flex-start;
-  gap: 12px;
-  background: var(--box-bg);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  padding: 12px 14px;
-  font-size: 0.78rem;
-  color: var(--text-muted);
-  line-height: 1.45;
-}
-
-.banner-icon {
-  color: var(--text-muted);
-  display: flex;
-  align-items: center;
-  margin-top: 1px;
-  flex-shrink: 0;
-}
-
-.banner-text strong {
-  color: var(--text-main);
-  font-weight: 600;
-}
-
-/* ==========================================================================
-   Sender & Receiver Step Pick / Inputs
-   ========================================================================== */
-.card-header-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 8px;
-}
-
-.section-heading {
-  font-size: 1.1rem;
-  font-weight: 600;
-  letter-spacing: -0.01em;
-  color: var(--text-main);
-}
-
-.btn-link {
-  background: none;
-  border: none;
-  color: var(--text-muted);
-  font-size: 0.82rem;
-  font-weight: 500;
-  cursor: pointer;
   display: inline-flex;
   align-items: center;
-  gap: 5px;
-  padding: 6px 8px;
-  border-radius: var(--radius-sm);
-  transition: all 0.15s ease;
+  justify-content: center;
+  gap: 8px;
+  padding: 9px 16px;
+  border-radius: 7px;
   font-family: inherit;
+  font-size: 0.88rem;
+  font-weight: 500;
+  color: var(--text-muted);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  touch-action: manipulation;
+  min-height: 40px;
 }
 
-.btn-link:hover {
+.tab-btn:hover {
   color: var(--text-main);
-  background: var(--box-bg);
 }
 
-/* Drop Zone */
+.tab-btn.active {
+  background: var(--tab-active-bg);
+  color: var(--text-main);
+  font-weight: 600;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+  border: 1px solid var(--border);
+}
+
+.tab-content {
+  width: 100%;
+}
+
+.tab-content.hidden {
+  display: none !important;
+}
+
+/* ==========================================================================
+   Drop Zone Component
+   ========================================================================== */
 .drop-zone {
   border: 1.5px dashed var(--border-hover);
-  border-radius: var(--radius-md);
-  padding: 40px 20px;
+  border-radius: 14px;
+  padding: 36px 20px;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -398,6 +283,7 @@ body {
   cursor: pointer;
   background: var(--box-bg);
   transition: all 0.15s ease;
+  user-select: none;
 }
 
 .drop-zone:hover, .drop-zone.dragover {
@@ -405,42 +291,56 @@ body {
   background: var(--primary-tint);
 }
 
-.drop-icon {
+.drop-icon-box {
+  width: 52px;
+  height: 52px;
+  border-radius: 50%;
+  background: var(--primary-tint);
   color: var(--primary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
   margin-bottom: 2px;
 }
 
-.drop-text {
-  font-size: 0.96rem;
+.drop-title {
+  font-size: 1rem;
   font-weight: 600;
+  letter-spacing: -0.01em;
   color: var(--text-main);
 }
 
 .drop-sub {
-  font-size: 0.8rem;
+  font-size: 0.82rem;
   color: var(--text-muted);
+  max-width: 320px;
+  line-height: 1.4;
 }
 
-.btn-browse {
+.btn-select-file {
   margin-top: 6px;
-  padding: 8px 18px;
-  font-size: 0.82rem;
+  padding: 8px 22px;
+  font-size: 0.85rem;
+  border-radius: var(--radius-sm);
 }
 
 .hidden-input {
   display: none;
 }
 
-/* Receiver Code Input */
+/* ==========================================================================
+   Receiver Code Input Component
+   ========================================================================== */
 .input-card-body {
   display: flex;
   flex-direction: column;
   gap: 16px;
-  margin-top: 4px;
+  padding: 10px 0;
+  text-align: center;
 }
 
 .input-label {
-  font-size: 0.85rem;
+  font-size: 0.88rem;
   font-weight: 500;
   color: var(--text-muted);
 }
@@ -450,21 +350,28 @@ body {
   border: 1.5px solid var(--border);
   color: var(--text-main);
   font-family: var(--font-mono);
-  font-size: 2rem;
+  font-size: 2.2rem;
   font-weight: 700;
   letter-spacing: 0.25em;
   text-align: center;
   padding: 12px 16px;
   border-radius: var(--radius-sm);
   outline: none;
-  transition: border-color 0.15s ease;
+  transition: all 0.15s ease;
   width: 100%;
   text-transform: uppercase;
-  min-height: 56px;
+  min-height: 58px;
 }
 
 .code-input:focus {
   border-color: var(--primary);
+  box-shadow: 0 0 0 3px var(--primary-tint);
+}
+
+.btn-receive-action {
+  width: 100%;
+  min-height: 48px;
+  font-size: 0.96rem;
 }
 
 /* ==========================================================================
@@ -604,7 +511,7 @@ body {
   font-family: var(--font-mono);
   font-size: 2.25rem;
   font-weight: 700;
-  letter-spacing: 0.18em;
+  letter-spacing: 0.2em;
   color: var(--text-main);
   padding: 4px 0;
   user-select: all;
@@ -733,7 +640,7 @@ body {
 }
 
 /* ==========================================================================
-   Interactive Buttons (Touch-Friendly Ergonomics)
+   Buttons (Ergonomic Touch Targets)
    ========================================================================== */
 .btn {
   font-family: inherit;
@@ -790,12 +697,6 @@ body {
   background: var(--danger-hover);
 }
 
-.btn-receive-action {
-  width: 100%;
-  min-height: 50px;
-  font-size: 1rem;
-}
-
 .btn-group {
   display: flex;
   gap: 10px;
@@ -804,6 +705,26 @@ body {
 
 .btn-group .btn {
   flex: 1;
+}
+
+.btn-link {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-size: 0.82rem;
+  font-weight: 500;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 6px 8px;
+  border-radius: var(--radius-sm);
+  transition: all 0.15s ease;
+  font-family: inherit;
+}
+
+.btn-link:hover {
+  color: var(--text-main);
 }
 
 /* ==========================================================================
@@ -935,7 +856,6 @@ body {
   color: #8b5cf6;
 }
 
-/* Bypassed Cloud Relay in LAN mode */
 .hop-node.relay.bypassed .hop-icon {
   border-color: var(--border);
   color: var(--text-sub);
@@ -971,7 +891,7 @@ body {
 }
 
 .hop-link {
-  flex: 0 0 24px;
+  flex: 0 0 20px;
   height: 2px;
   background: var(--border);
   position: relative;
@@ -1133,14 +1053,26 @@ body {
   margin-bottom: 12px;
 }
 
+/* Trust Footer Badge */
+.trust-footer {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  font-size: 0.76rem;
+  color: var(--text-sub);
+  padding: 4px;
+  text-align: center;
+}
+
 .hidden {
   display: none !important;
 }
 
 /* ==========================================================================
-   Mobile UI Breakpoints & Responsive Enhancements
+   Mobile UI Breakpoints (<=520px)
    ========================================================================== */
-@media (max-width: 540px) {
+@media (max-width: 520px) {
   body {
     padding: 16px 12px;
     justify-content: flex-start;
@@ -1151,48 +1083,32 @@ body {
   }
 
   .card.main-card {
-    padding: 20px 16px;
+    padding: 18px 14px;
     border-radius: 14px;
     gap: 16px;
   }
 
-  .hero-title {
-    font-size: 1.15rem;
+  .drop-zone {
+    padding: 28px 14px;
   }
 
-  .hero-sub {
-    font-size: 0.82rem;
+  .drop-title {
+    font-size: 0.94rem;
   }
 
-  .action-card {
-    padding: 14px 14px;
-    min-height: 68px;
-    gap: 12px;
-  }
-
-  .action-icon {
-    width: 38px;
-    height: 38px;
-    min-width: 38px;
-  }
-
-  .action-title {
-    font-size: 0.98rem;
-  }
-
-  .action-desc {
+  .drop-sub {
     font-size: 0.76rem;
   }
 
   .code-number {
     font-size: 1.85rem;
-    letter-spacing: 0.15em;
+    letter-spacing: 0.16em;
   }
 
   .code-input {
     font-size: 1.65rem;
     padding: 10px 12px;
-    min-height: 50px;
+    min-height: 52px;
     letter-spacing: 0.2em;
   }
 
@@ -1205,7 +1121,7 @@ body {
   }
 
   .stat-val {
-    font-size: 0.94rem;
+    font-size: 0.92rem;
   }
 
   .devices-row {
@@ -1213,6 +1129,6 @@ body {
   }
 
   .hop-link {
-    flex: 0 0 14px;
+    flex: 0 0 12px;
   }
 }
