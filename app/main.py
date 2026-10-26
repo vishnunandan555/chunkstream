@@ -18,14 +18,12 @@ from fastapi import (
     status,
 )
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator
 
 from app.logging_config import request_id_ctx, setup_logging
 from app.metrics import metrics
 from app.storage import (
-    assemble_file_async,
     check_storage_health,
     cleanup_expired_transfers,
     create_transfer,
@@ -34,7 +32,6 @@ from app.storage import (
     init_db,
     list_transfers,
     sanitize_filename,
-    save_chunk,
     update_transfer_status,
 )
 from app.transfer import (
@@ -43,20 +40,19 @@ from app.transfer import (
     manager,
 )
 
-APP_VERSION = os.environ.get("CHUNKSTREAM_VERSION", "2.0.0")
+APP_VERSION = os.environ.get("CHUNKSTREAM_VERSION", "2.1.0")
 APP_START_TIME = time.time()
 ENVIRONMENT = os.environ.get("ENVIRONMENT", "production").lower()
-MAX_CHUNK_UPLOAD_BYTES = int(os.environ.get("MAX_CHUNK_UPLOAD_BYTES", 10 * 1024 * 1024))
 
 logger = setup_logging(os.environ.get("LOG_LEVEL", "INFO"))
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    logger.info("Starting ChunkStream v%s (env: %s)", APP_VERSION, ENVIRONMENT)
+    logger.info("Starting ChunkStream Zero-Storage Relay v%s (env: %s)", APP_VERSION, ENVIRONMENT)
     init_db()
 
-    # Background worker: prune stale transfers older than 1 hour every 30 mins
+    # Background worker: clean up expired metadata records older than 1 hour
     stop_event = asyncio.Event()
 
     async def _cleanup_worker():
@@ -81,7 +77,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="ChunkStream",
-    description="Minimal, ultra-fast resumable file transfer service",
+    description="Ultra-fast zero-server-storage peer file streaming relay",
     version=APP_VERSION,
     lifespan=lifespan,
 )
@@ -139,7 +135,6 @@ def generate_transfer_id() -> str:
         code = f"{secrets.randbelow(9000) + 1000}"
         if not get_transfer(code):
             return code
-    # Fallback to 6 alphanumeric characters
     alphabet = string.ascii_uppercase + string.digits
     for _ in range(50):
         code = "".join(secrets.choice(alphabet) for _ in range(6))
@@ -150,9 +145,9 @@ def generate_transfer_id() -> str:
 
 class CreateTransferRequest(BaseModel):
     filename: str
-    filesize: int = Field(gt=0, le=10 * 1024 * 1024 * 1024, description="File size up to 10 GB")
+    filesize: int = Field(gt=0, le=100 * 1024 * 1024 * 1024, description="File size up to 100 GB")
     chunk_size: int = Field(default=262144, ge=1, le=10 * 1024 * 1024)
-    total_chunks: int = Field(gt=0, le=500_000)
+    total_chunks: int = Field(gt=0, le=1_000_000)
     mime_type: Optional[str] = "application/octet-stream"
     checksum: Optional[str] = None
     transfer_id: Optional[str] = None
@@ -188,6 +183,7 @@ async def health_check():
         "version": APP_VERSION,
         "uptime_seconds": int(time.time() - APP_START_TIME),
         "active_connections": active_ws,
+        "zero_server_storage": True,
     }
 
 
@@ -206,13 +202,14 @@ async def get_version():
     return {
         "version": APP_VERSION,
         "service": "chunkstream",
+        "zero_server_storage": True,
         "uptime": round(time.time() - APP_START_TIME, 2),
     }
 
 
 @app.post("/api/transfers", tags=["Transfer"])
 async def init_transfer(payload: CreateTransferRequest):
-    """Initializes a new transfer session."""
+    """Initializes a new transfer session metadata."""
     transfer_id = payload.transfer_id or generate_transfer_id()
     existing = get_transfer(transfer_id)
     if existing:
@@ -250,90 +247,16 @@ async def get_transfer_metrics(transfer_id: str):
     return {"transfer_id": transfer_id, "metrics": get_transfer_telemetry_summary(transfer_id)}
 
 
-@app.post("/api/transfers/{transfer_id}/chunks/{chunk_index}", tags=["Transfer"])
-async def upload_chunk_http(
-    transfer_id: str,
-    chunk_index: int,
-    request: Request,
-    checksum: Optional[str] = Query(None),
-):
-    """HTTP chunk upload endpoint."""
-    data = await request.body()
-    if len(data) > MAX_CHUNK_UPLOAD_BYTES:
-        raise HTTPException(
-            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-            detail=f"Chunk exceeds limit of {MAX_CHUNK_UPLOAD_BYTES} bytes",
-        )
-
-    success, msg = save_chunk(transfer_id, chunk_index, data, expected_checksum=checksum)
-    if not success:
-        raise HTTPException(status_code=400, detail=msg)
-
-    metrics.record_chunk("success")
-    return {
-        "status": "saved",
-        "transfer_id": transfer_id,
-        "chunk_index": chunk_index,
-        "bytes_received": len(data),
-    }
-
-
-@app.post("/api/transfers/{transfer_id}/assemble", tags=["Transfer"])
-async def trigger_assembly(transfer_id: str):
-    """Triggers file reassembly."""
-    success, out_path, err = await assemble_file_async(transfer_id)
-    if not success:
-        raise HTTPException(status_code=400, detail=err)
-
-    return {
-        "status": "completed",
-        "transfer_id": transfer_id,
-        "download_url": f"/api/transfers/{transfer_id}/download",
-    }
-
-
-@app.get("/api/transfers/{transfer_id}/download", tags=["Transfer"])
-async def download_file(transfer_id: str):
-    """Downloads the assembled file with path validation."""
-    record = get_transfer(transfer_id)
-    if not record:
-        raise HTTPException(status_code=404, detail="Transfer not found")
-
-    safe_name = sanitize_filename(record["filename"])
-    downloads_base = os.path.join(os.environ.get("CHUNKSTREAM_DATA_DIR", "data"), "downloads")
-    out_dir = os.path.join(downloads_base, transfer_id)
-    out_path = os.path.join(out_dir, safe_name)
-
-    abs_base = os.path.abspath(downloads_base)
-    abs_path = os.path.abspath(out_path)
-    if not abs_path.startswith(abs_base + os.sep):
-        raise HTTPException(status_code=400, detail="Invalid transfer path detected")
-
-    if not os.path.isfile(out_path):
-        success, assembled_path, err = await assemble_file_async(transfer_id)
-        if not success or not assembled_path:
-            raise HTTPException(
-                status_code=400, detail=f"File not ready for download: {err or 'Missing chunks'}"
-            )
-        out_path = assembled_path
-
-    return FileResponse(
-        out_path,
-        media_type=record.get("mime_type") or "application/octet-stream",
-        filename=safe_name,
-    )
-
-
 @app.delete("/api/transfers/{transfer_id}", tags=["Transfer"])
 async def remove_transfer(transfer_id: str):
-    """Deletes transfer and immediately frees server disk space."""
+    """Deletes transfer session metadata."""
     deleted = delete_transfer(transfer_id)
     if not deleted:
         raise HTTPException(status_code=404, detail=f"Transfer {transfer_id} not found")
     return {"status": "deleted", "transfer_id": transfer_id}
 
 
-# --- WebSocket Endpoint ---
+# --- Real-Time Streaming WebSocket ---
 
 
 @app.websocket("/ws/transfer/{transfer_id}")
@@ -342,7 +265,7 @@ async def transfer_websocket(
     transfer_id: str,
     role: str = Query("observer"),
 ):
-    """Live WebSocket relay for real-time chunk streaming & peer progress."""
+    """Zero-server-storage real-time streaming WebSocket relay."""
     await manager.connect(websocket, transfer_id, role)
     try:
         while True:

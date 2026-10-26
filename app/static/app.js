@@ -62,6 +62,16 @@ function arrayBufferToBase64(buffer) {
   return window.btoa(binary);
 }
 
+function base64ToUint8Array(base64) {
+  const binaryString = window.atob(base64);
+  const len = binaryString.length;
+  const bytes = new Uint8Array(len);
+  for (let i = 0; i < len; i++) {
+    bytes[i] = binaryString.charCodeAt(i);
+  }
+  return bytes;
+}
+
 // Global State
 let currentFile = null;
 let currentCode = null;
@@ -79,8 +89,9 @@ let senderStartTime = 0;
 
 let rxBytesReceived = 0;
 let rxStartTime = 0;
-let rxPendingDownloadUrl = null;
-let rxPendingFilename = null;
+let rxWritableStream = null;
+let rxChunksMap = new Map(); // Fallback for browsers without FileSystem Access API
+let rxReceivedIndices = new Set();
 
 // DOM Elements
 const viewHome = document.getElementById('view-home');
@@ -135,8 +146,6 @@ const rxProgressBytes = document.getElementById('rx-progress-bytes');
 const rxProgressChunks = document.getElementById('rx-progress-chunks');
 const rxActiveControls = document.getElementById('rx-active-controls');
 const btnCancelReceive = document.getElementById('btn-cancel-receive');
-const rxDownloadReadyBox = document.getElementById('rx-download-ready-box');
-const btnTriggerDownload = document.getElementById('btn-trigger-download');
 const rxClearedBox = document.getElementById('rx-cleared-box');
 const rxStatusFinished = document.getElementById('rx-status-finished');
 const btnReceiveAgain = document.getElementById('btn-receive-again');
@@ -310,7 +319,7 @@ function startStreamingChunks(missingList) {
 
   isStreaming = true;
   senderStartTime = Date.now();
-  senderStatusText.textContent = 'Streaming file to receiver...';
+  senderStatusText.textContent = 'Streaming file live to receiver...';
   senderStatusDot.className = 'status-dot green';
   senderProgressBox.classList.remove('hidden');
 
@@ -362,6 +371,7 @@ async function streamFileChunks(missingList) {
         type: 'chunk',
         index: idx,
         total: totalChunks,
+        size: buffer.byteLength,
         data: b64,
       }));
     }
@@ -441,12 +451,14 @@ async function resumeTransfer() {
   try {
     const res = await fetch(`/api/transfers/${currentCode}`);
     if (res.ok) {
-      const info = await res.json();
       isPaused = false;
       if (senderWs && senderWs.readyState === WebSocket.OPEN) {
         senderWs.send(JSON.stringify({ type: 'resume' }));
       }
-      startStreamingChunks(info.missing_chunks);
+      // Resume remaining unacknowledged chunks
+      const allChunks = Array.from({ length: totalChunks }, (_, i) => i);
+      const remaining = allChunks.filter(i => !ackedChunks.has(i));
+      startStreamingChunks(remaining);
     }
   } catch (err) {
     senderStatusText.textContent = 'Could not fetch transfer state';
@@ -521,30 +533,42 @@ async function startReceiving() {
     rxFileName.textContent = data.filename;
     rxFileSize.textContent = formatBytes(data.filesize);
 
+    // Direct-to-Disk Streamer (FileSystem Access API)
+    rxWritableStream = null;
+    rxChunksMap.clear();
+    rxReceivedIndices.clear();
+
+    if ('showSaveFilePicker' in window) {
+      try {
+        const fileHandle = await window.showSaveFilePicker({
+          suggestedName: data.filename,
+        });
+        rxWritableStream = await fileHandle.createWritable();
+      } catch (pickerErr) {
+        if (pickerErr.name === 'AbortError') return; // User cancelled picker
+        console.warn('File picker unavailable, falling back to memory assembly:', pickerErr);
+      }
+    }
+
     receiverStepInput.classList.add('hidden');
     receiverStepTransfer.classList.remove('hidden');
     rxActiveControls.classList.remove('hidden');
     rxProgressBox.classList.remove('hidden');
-    rxDownloadReadyBox.classList.add('hidden');
     rxClearedBox.classList.add('hidden');
 
-    // Instant Completion Detection!
-    if (data.status === 'completed') {
-      showDownloadReady(code, data.filename);
-      return;
-    }
-
-    rxStatusText.textContent = 'Connecting to sender...';
-    rxStatusDot.className = 'status-dot';
-    rxProgressFill.style.width = `${data.progress_percentage || 0}%`;
-    rxProgressPct.textContent = `${data.progress_percentage || 0}%`;
+    rxStatusText.textContent = rxWritableStream
+      ? 'Connected. Streaming directly to disk...'
+      : 'Connected. Receiving stream...';
+    rxStatusDot.className = 'status-dot green';
+    rxProgressFill.style.width = '0%';
+    rxProgressPct.textContent = '0%';
     rxSpeed.textContent = '0.0 MB/s';
     rxEta.textContent = '--';
-    rxProgressBytes.textContent = `${formatBytes((data.received_chunks_count || 0) * data.chunk_size)} / ${formatBytes(data.filesize)}`;
-    rxProgressChunks.textContent = `Chunk ${data.received_chunks_count || 0}/${data.total_chunks}`;
+    rxProgressBytes.textContent = `0 B / ${formatBytes(data.filesize)}`;
+    rxProgressChunks.textContent = `Chunk 0/${data.total_chunks}`;
 
     rxStartTime = Date.now();
-    rxBytesReceived = (data.received_chunks_count || 0) * data.chunk_size;
+    rxBytesReceived = 0;
 
     connectReceiverWebSocket(code, data);
   } catch (err) {
@@ -556,16 +580,13 @@ function connectReceiverWebSocket(code, transferData) {
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
   receiverWs = new WebSocket(`${protocol}//${window.location.host}/ws/transfer/${code}?role=receiver`);
 
-  let receivedChunks = new Set(transferData.acknowledged_chunks || []);
   const total = transferData.total_chunks;
 
   receiverWs.onopen = () => {
-    rxStatusText.textContent = 'Connected. Waiting for chunks...';
-    rxStatusDot.className = 'status-dot green';
-    receiverWs.send(JSON.stringify({ type: 'resume_request' }));
+    receiverWs.send(JSON.stringify({ type: 'resume_request', missing_chunks: [] }));
   };
 
-  receiverWs.onmessage = (e) => {
+  receiverWs.onmessage = async (e) => {
     try {
       const msg = JSON.parse(e.data);
       if (msg.type === 'peer_disconnected' && msg.role === 'sender') {
@@ -573,7 +594,7 @@ function connectReceiverWebSocket(code, transferData) {
         rxStatusText.textContent = 'Sender disconnected. Waiting...';
       } else if (msg.type === 'peer_connected' && msg.role === 'sender') {
         rxStatusDot.className = 'status-dot green';
-        rxStatusText.textContent = 'Receiving file...';
+        rxStatusText.textContent = 'Receiving stream...';
       } else if (msg.type === 'peer_paused') {
         rxStatusDot.className = 'status-dot';
         rxStatusText.textContent = 'Sender paused transfer';
@@ -581,23 +602,40 @@ function connectReceiverWebSocket(code, transferData) {
         rxEta.textContent = 'Paused';
       } else if (msg.type === 'peer_resumed') {
         rxStatusDot.className = 'status-dot green';
-        rxStatusText.textContent = 'Receiving file...';
+        rxStatusText.textContent = 'Receiving stream...';
       } else if (msg.type === 'peer_cancelled') {
         rxStatusDot.className = 'status-dot red';
         rxStatusText.textContent = 'Transfer cancelled by sender';
         rxActiveControls.classList.add('hidden');
-        rxDownloadReadyBox.classList.add('hidden');
         rxClearedBox.classList.remove('hidden');
         rxStatusFinished.textContent = 'Transfer cancelled';
+        if (rxWritableStream) {
+          try { await rxWritableStream.abort(); } catch (_) {}
+          rxWritableStream = null;
+        }
       } else if (msg.type === 'chunk_data') {
+        // Send ACK back
         if (receiverWs && receiverWs.readyState === WebSocket.OPEN) {
           receiverWs.send(JSON.stringify({ type: 'rx_ack', index: msg.index }));
         }
 
-        receivedChunks.add(msg.index);
-        rxBytesReceived = Math.min(receivedChunks.size * transferData.chunk_size, transferData.filesize);
+        const chunkBytes = base64ToUint8Array(msg.data);
 
-        const pct = Math.round((receivedChunks.size / total) * 100);
+        // Stream chunk directly to disk without storing in memory
+        if (rxWritableStream) {
+          await rxWritableStream.write({
+            type: 'write',
+            position: msg.index * transferData.chunk_size,
+            data: chunkBytes,
+          });
+        } else {
+          rxChunksMap.set(msg.index, chunkBytes);
+        }
+
+        rxReceivedIndices.add(msg.index);
+        rxBytesReceived += chunkBytes.length;
+
+        const pct = Math.round((rxReceivedIndices.size / total) * 100);
         rxProgressFill.style.width = `${pct}%`;
         rxProgressPct.textContent = `${pct}%`;
 
@@ -613,13 +651,13 @@ function connectReceiverWebSocket(code, transferData) {
         }
 
         rxProgressBytes.textContent = `${formatBytes(rxBytesReceived)} / ${formatBytes(transferData.filesize)}`;
-        rxProgressChunks.textContent = `Chunk ${receivedChunks.size}/${total}`;
+        rxProgressChunks.textContent = `Chunk ${rxReceivedIndices.size}/${total}`;
 
-        if (receivedChunks.size === total) {
-          showDownloadReady(code, transferData.filename);
+        if (rxReceivedIndices.size === total) {
+          completeReceiverFile(transferData.filename, transferData.mime_type);
         }
       } else if (msg.type === 'completed') {
-        showDownloadReady(code, transferData.filename);
+        completeReceiverFile(transferData.filename, transferData.mime_type);
       }
     } catch (err) {
       console.warn('Receiver message error:', err);
@@ -627,48 +665,63 @@ function connectReceiverWebSocket(code, transferData) {
   };
 }
 
-function showDownloadReady(code, filename) {
-  rxStatusText.textContent = '✓ File received & verified';
+async function completeReceiverFile(filename, mimeType) {
+  rxStatusText.textContent = '✓ Transfer complete!';
   rxStatusDot.className = 'status-dot green';
   rxProgressFill.style.width = '100%';
   rxProgressPct.textContent = '100%';
   rxEta.textContent = 'Done';
-
-  rxPendingDownloadUrl = `/api/transfers/${code}/download`;
-  rxPendingFilename = filename;
   rxActiveControls.classList.add('hidden');
-  rxDownloadReadyBox.classList.remove('hidden');
+
+  // If using FileSystem Access API, close writable stream
+  if (rxWritableStream) {
+    try {
+      await rxWritableStream.close();
+    } catch (closeErr) {
+      console.error('Error closing file stream:', closeErr);
+    }
+    rxWritableStream = null;
+    rxStatusFinished.textContent = '✓ File saved directly to your device!';
+  } else if (rxChunksMap.size > 0) {
+    // Fallback: assemble Blob in memory and trigger download
+    const sortedChunks = [];
+    for (let i = 0; i < rxReceivedIndices.size; i++) {
+      if (rxChunksMap.has(i)) {
+        sortedChunks.push(rxChunksMap.get(i));
+      }
+    }
+    const blob = new Blob(sortedChunks, { type: mimeType || 'application/octet-stream' });
+    const url = URL.createObjectURL(blob);
+    const tempLink = document.createElement('a');
+    tempLink.href = url;
+    tempLink.download = filename || 'download';
+    document.body.appendChild(tempLink);
+    tempLink.click();
+    document.body.removeChild(tempLink);
+    URL.revokeObjectURL(url);
+    rxChunksMap.clear();
+    rxStatusFinished.textContent = '✓ File downloaded to your browser!';
+  }
+
+  rxClearedBox.classList.remove('hidden');
 }
 
 btnCancelReceive.addEventListener('click', cancelReceive);
 
-function cancelReceive() {
+async function cancelReceive() {
   if (receiverWs && receiverWs.readyState === WebSocket.OPEN) {
     receiverWs.send(JSON.stringify({ type: 'cancel' }));
     receiverWs.close();
     receiverWs = null;
   }
+  if (rxWritableStream) {
+    try { await rxWritableStream.abort(); } catch (_) {}
+    rxWritableStream = null;
+  }
+  rxChunksMap.clear();
+  rxReceivedIndices.clear();
   resetReceiver();
 }
-
-btnTriggerDownload.addEventListener('click', () => {
-  if (!rxPendingDownloadUrl) return;
-
-  const tempLink = document.createElement('a');
-  tempLink.href = rxPendingDownloadUrl;
-  tempLink.download = rxPendingFilename || 'download';
-  document.body.appendChild(tempLink);
-  tempLink.click();
-  document.body.removeChild(tempLink);
-
-  rxDownloadReadyBox.classList.add('hidden');
-  rxProgressBox.classList.add('hidden');
-  rxStatusFinished.textContent = '✓ File downloaded successfully';
-  rxClearedBox.classList.remove('hidden');
-
-  rxPendingDownloadUrl = null;
-  rxPendingFilename = null;
-});
 
 btnReceiveAgain.addEventListener('click', () => {
   resetReceiver();
@@ -680,10 +733,15 @@ function resetReceiver() {
     receiverWs.close();
     receiverWs = null;
   }
+  if (rxWritableStream) {
+    try { rxWritableStream.abort(); } catch (_) {}
+    rxWritableStream = null;
+  }
+  rxChunksMap.clear();
+  rxReceivedIndices.clear();
   receiveCodeInput.value = '';
   receiverStepInput.classList.remove('hidden');
   receiverStepTransfer.classList.add('hidden');
-  rxDownloadReadyBox.classList.add('hidden');
   rxClearedBox.classList.add('hidden');
   rxProgressBox.classList.remove('hidden');
   rxActiveControls.classList.remove('hidden');

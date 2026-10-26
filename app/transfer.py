@@ -1,5 +1,4 @@
 import asyncio
-import base64
 import json
 import logging
 import time
@@ -7,10 +6,8 @@ from typing import Any, Dict, List, Optional, Set
 from fastapi import WebSocket
 
 from app.storage import (
-    assemble_file,
     delete_transfer,
     get_transfer,
-    save_chunk,
     update_transfer_status,
 )
 
@@ -61,7 +58,7 @@ def clear_transfer_telemetry(transfer_id: str) -> None:
 
 
 class ConnectionManager:
-    """Manages active WebSockets for file transfer relay and progress reporting."""
+    """Manages active WebSockets for pure real-time in-memory relay."""
 
     def __init__(self) -> None:
         self.active_connections: Dict[str, Set[WebSocket]] = {}
@@ -172,7 +169,7 @@ manager = ConnectionManager()
 
 
 async def handle_websocket_message(websocket: WebSocket, raw_message: str) -> None:
-    """Processes incoming messages from sender or receiver."""
+    """Processes incoming messages from sender or receiver (Zero Server Storage)."""
     meta = manager.connection_meta.get(websocket)
     if not meta:
         return
@@ -193,8 +190,9 @@ async def handle_websocket_message(websocket: WebSocket, raw_message: str) -> No
         await websocket.send_text(json.dumps({"type": "pong", "transfer_id": transfer_id}))
         return
 
-    # 2. Receiver ACK
+    # 2. Receiver ACK: forward to sender
     if msg_type == "rx_ack":
+        await manager.send_to_role(transfer_id, "sender", data)
         return
 
     # 3. Pause Transfer
@@ -226,12 +224,13 @@ async def handle_websocket_message(websocket: WebSocket, raw_message: str) -> No
         delete_transfer(transfer_id)
         return
 
-    # 6. Chunk received from sender
+    # 6. Real-Time Chunk Relay (ZERO SERVER DISK USAGE)
     if msg_type == "chunk":
         chunk_index = data.get("index")
         total_chunks = data.get("total")
         chunk_data_b64 = data.get("data")
         chunk_hash = data.get("hash")
+        chunk_size = data.get("size", len(chunk_data_b64) if chunk_data_b64 else 0)
 
         if chunk_index is None or chunk_data_b64 is None:
             await websocket.send_text(
@@ -239,44 +238,14 @@ async def handle_websocket_message(websocket: WebSocket, raw_message: str) -> No
             )
             return
 
-        # Decode base64 safely
-        try:
-            chunk_bytes = base64.b64decode(chunk_data_b64)
-        except Exception as e:
-            await websocket.send_text(
-                json.dumps(
-                    {
-                        "type": "chunk_error",
-                        "index": chunk_index,
-                        "error": f"Base64 decode error: {e}",
-                        "retryable": False,
-                    }
-                )
-            )
-            return
+        record_chunk_throughput(transfer_id, chunk_size)
 
-        success, msg = save_chunk(transfer_id, chunk_index, chunk_bytes, chunk_hash)
-        if not success:
-            await websocket.send_text(
-                json.dumps(
-                    {
-                        "type": "chunk_error",
-                        "index": chunk_index,
-                        "error": msg,
-                        "retryable": True,
-                    }
-                )
-            )
-            return
-
-        record_chunk_throughput(transfer_id, len(chunk_bytes))
-
-        # Send ACK back to sender immediately
+        # ACK to sender immediately so flow control advances
         await websocket.send_text(
             json.dumps({"type": "chunk_ack", "index": chunk_index, "transfer_id": transfer_id})
         )
 
-        # Forward chunk to receiver(s) in real time
+        # Forward chunk directly to receiver in real time (streamed straight to receiver disk/RAM)
         await manager.send_to_role(
             transfer_id,
             "receiver",
@@ -285,78 +254,37 @@ async def handle_websocket_message(websocket: WebSocket, raw_message: str) -> No
                 "transfer_id": transfer_id,
                 "index": chunk_index,
                 "total": total_chunks,
-                "size": len(chunk_bytes),
+                "size": chunk_size,
                 "data": chunk_data_b64,
                 "hash": chunk_hash,
             },
         )
+        return
 
-        # Broadcast progress update
-        transfer_info = get_transfer(transfer_id)
-        if transfer_info:
-            await manager.broadcast(
-                transfer_id,
-                {
-                    "type": "progress",
-                    "transfer_id": transfer_id,
-                    "received": transfer_info["received_chunks_count"],
-                    "total": transfer_info["total_chunks"],
-                    "percentage": transfer_info["progress_percentage"],
-                    "status": transfer_info["status"],
-                },
-            )
-
-    # 7. Resume Request (Query missing chunks)
+    # 7. Resume Request: receiver announces missing chunks to sender
     elif msg_type == "resume_request":
-        transfer_info = get_transfer(transfer_id)
-        if not transfer_info:
-            await websocket.send_text(
-                json.dumps({"type": "error", "message": f"Transfer {transfer_id} not found"})
-            )
-            return
-
         update_transfer_status(transfer_id, "transferring")
-        await websocket.send_text(
-            json.dumps(
-                {
-                    "type": "resume_state",
-                    "transfer_id": transfer_id,
-                    "filename": transfer_info["filename"],
-                    "filesize": transfer_info["filesize"],
-                    "total_chunks": transfer_info["total_chunks"],
-                    "chunk_size": transfer_info["chunk_size"],
-                    "acknowledged_chunks": transfer_info["acknowledged_chunks"],
-                    "missing_chunks": transfer_info["missing_chunks"],
-                    "received_count": transfer_info["received_chunks_count"],
-                }
-            )
-        )
-
-        # Request missing chunks from sender
+        # Forward missing chunk request directly to sender
+        missing_chunks = data.get("missing_chunks", [])
         await manager.send_to_role(
             transfer_id,
             "sender",
             {
                 "type": "request_missing",
                 "transfer_id": transfer_id,
-                "missing_chunks": transfer_info["missing_chunks"],
+                "missing_chunks": missing_chunks,
             },
         )
+        return
 
-    # 8. Assemble complete file
+    # 8. Transfer Completed
     elif msg_type == "complete":
-        success, out_path, err = assemble_file(transfer_id)
-        if not success:
-            await manager.broadcast(
-                transfer_id,
-                {"type": "assembly_failed", "transfer_id": transfer_id, "error": err},
-            )
-        else:
-            await manager.broadcast(
-                transfer_id,
-                {
-                    "type": "completed",
-                    "transfer_id": transfer_id,
-                    "download_url": f"/api/transfers/{transfer_id}/download",
-                },
-            )
+        update_transfer_status(transfer_id, "completed")
+        await manager.broadcast(
+            transfer_id,
+            {
+                "type": "completed",
+                "transfer_id": transfer_id,
+            },
+        )
+        return

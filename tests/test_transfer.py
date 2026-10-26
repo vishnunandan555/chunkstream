@@ -12,15 +12,12 @@ os.environ["LOG_LEVEL"] = "DEBUG"
 
 from app.main import app
 from app.storage import (
-    CHUNKS_DIR,
-    assemble_file,
+    DATA_DIR,
     cleanup_expired_transfers,
     create_transfer,
     delete_transfer,
-    get_chunk,
     get_transfer,
     init_db,
-    save_chunk,
 )
 
 
@@ -39,6 +36,7 @@ def test_health_check_healthy():
     data = response.json()
     assert data["status"] == "healthy"
     assert data["service"] == "chunkstream"
+    assert data["zero_server_storage"] is True
 
 
 def test_version_endpoint():
@@ -47,89 +45,26 @@ def test_version_endpoint():
     data = response.json()
     assert "version" in data
     assert data["service"] == "chunkstream"
+    assert data["zero_server_storage"] is True
 
 
-def test_transfer_lifecycle_and_chunk_cleanup():
-    # 100 KB payload
-    payload = b"A" * 32768 + b"B" * 32768 + b"C" * 34464
-    chunk_size = 32768
-    total_chunks = 3
-    file_hash = hashlib.sha256(payload).hexdigest()
-
-    transfer_id = "PROD-FLOW-01"
+def test_transfer_metadata_and_zero_server_disk():
+    transfer_id = "PROD-META-01"
     record = create_transfer(
         transfer_id=transfer_id,
-        filename="test_payload.bin",
-        filesize=len(payload),
-        chunk_size=chunk_size,
-        total_chunks=total_chunks,
-        checksum=file_hash,
+        filename="big_archive.zip",
+        filesize=5 * 1024 * 1024 * 1024,  # 5 GB virtual file
+        chunk_size=524288,
+        total_chunks=10000,
     )
 
     assert record["id"] == transfer_id
-    assert record["total_chunks"] == 3
-    assert record["missing_chunks"] == [0, 1, 2]
+    assert record["filename"] == "big_archive.zip"
+    assert record["filesize"] == 5 * 1024 * 1024 * 1024
 
-    # Save chunk 0
-    ok, _ = save_chunk(transfer_id, 0, payload[0:32768])
-    assert ok is True
-
-    # Missing should be [1, 2]
-    t_state = get_transfer(transfer_id)
-    assert t_state["acknowledged_chunks"] == [0]
-    assert t_state["missing_chunks"] == [1, 2]
-
-    # Assembly must fail while chunks missing
-    ok, path, err = assemble_file(transfer_id)
-    assert ok is False
-
-    # Save remaining chunks
-    assert save_chunk(transfer_id, 1, payload[32768:65536])[0] is True
-    assert save_chunk(transfer_id, 2, payload[65536:])[0] is True
-
-    # Assembly should now succeed
-    ok, path, err = assemble_file(transfer_id)
-    assert ok is True
-    assert path is not None
-    assert err is None
-
-    with open(path, "rb") as f:
-        assembled_data = f.read()
-    assert hashlib.sha256(assembled_data).hexdigest() == file_hash
-
-    # Crucial free-server check: intermediate chunk .part directory must be deleted!
-    chunk_dir = os.path.join(CHUNKS_DIR, transfer_id)
-    assert not os.path.exists(chunk_dir)
-
-
-def test_http_chunk_upload_api():
-    transfer_id = "PROD-API-02"
-    init_res = client.post(
-        "/api/transfers",
-        json={
-            "transfer_id": transfer_id,
-            "filename": "api_test.txt",
-            "filesize": 10,
-            "chunk_size": 5,
-            "total_chunks": 2,
-        },
-    )
-    assert init_res.status_code == 200
-
-    # Upload chunks via HTTP
-    c0 = client.post(f"/api/transfers/{transfer_id}/chunks/0", content=b"hello")
-    assert c0.status_code == 200
-    c1 = client.post(f"/api/transfers/{transfer_id}/chunks/1", content=b"world")
-    assert c1.status_code == 200
-
-    # Trigger assembly
-    asm_res = client.post(f"/api/transfers/{transfer_id}/assemble")
-    assert asm_res.status_code == 200
-
-    # Download assembled file
-    dl_res = client.get(f"/api/transfers/{transfer_id}/download")
-    assert dl_res.status_code == 200
-    assert dl_res.content == b"helloworld"
+    # Verify: ZERO chunk files and ZERO download directories exist on server disk!
+    assert not os.path.exists(os.path.join(DATA_DIR, "chunks"))
+    assert not os.path.exists(os.path.join(DATA_DIR, "downloads"))
 
 
 def test_path_traversal_sanitization():
@@ -149,14 +84,6 @@ def test_path_traversal_sanitization():
     assert data["filename"] == "passwd"
     assert ".." not in data["filename"]
 
-    client.post(f"/api/transfers/{transfer_id}/chunks/0", content=b"root:x")
-    client.post(f"/api/transfers/{transfer_id}/chunks/1", content=b":0:0::")
-    client.post(f"/api/transfers/{transfer_id}/assemble")
-
-    dl_res = client.get(f"/api/transfers/{transfer_id}/download")
-    assert dl_res.status_code == 200
-    assert dl_res.content == b"root:x:0:0::"
-
 
 def test_prometheus_metrics_endpoint():
     res = client.get("/metrics")
@@ -174,33 +101,33 @@ def test_delete_transfer_endpoint():
         chunk_size=5,
         total_chunks=1,
     )
-    save_chunk(transfer_id, 0, b"trash")
 
-    # DELETE endpoint
+    # DELETE endpoint removes metadata record
     del_res = client.delete(f"/api/transfers/{transfer_id}")
     assert del_res.status_code == 200
     assert del_res.json()["status"] == "deleted"
 
-    # Transfer should no longer exist
     assert get_transfer(transfer_id) is None
 
 
-def test_websocket_transfer_and_resume():
-    transfer_id = "PROD-WS-RESUME"
-    chunk_payloads = [b"AAA_", b"BBB_", b"CCC_", b"DDD_"]
-    full_payload = b"".join(chunk_payloads)
-    file_hash = hashlib.sha256(full_payload).hexdigest()
+def test_zero_storage_websocket_live_relay():
+    """
+    Validates live chunk relay: sender sends chunk -> server routes directly to receiver.
+    Zero chunk files are written to server disk.
+    """
+    transfer_id = "PROD-ZERO-STORE-WS"
+    chunk_data = b"STREAMING_CHUNK_PAYLOAD_DIRECT_TO_RECEIVER"
+    b64_data = base64.b64encode(chunk_data).decode("utf-8")
 
     create_transfer(
         transfer_id=transfer_id,
-        filename="resume_test.txt",
-        filesize=len(full_payload),
-        chunk_size=4,
-        total_chunks=4,
-        checksum=file_hash,
+        filename="live_stream.dat",
+        filesize=len(chunk_data),
+        chunk_size=len(chunk_data),
+        total_chunks=1,
     )
 
-    # 1. Receiver connects first
+    # 1. Receiver connects
     with client.websocket_connect(f"/ws/transfer/{transfer_id}?role=receiver") as rx_ws:
         _ = rx_ws.receive_json()  # peer_connected
 
@@ -209,64 +136,46 @@ def test_websocket_transfer_and_resume():
             _ = sender_ws.receive_json()  # peer_connected on sender
             _ = rx_ws.receive_json()      # peer_connected on receiver
 
-            # Stream chunk 0
+            # Sender streams chunk live
             sender_ws.send_json({
                 "type": "chunk",
                 "index": 0,
-                "total": 4,
-                "data": base64.b64encode(chunk_payloads[0]).decode("utf-8"),
-                "hash": hashlib.sha256(chunk_payloads[0]).hexdigest(),
+                "total": 1,
+                "size": len(chunk_data),
+                "data": b64_data,
+                "hash": hashlib.sha256(chunk_data).hexdigest(),
             })
 
-            _ = sender_ws.receive_json()  # chunk_ack
-            _ = sender_ws.receive_json()  # progress
+            # Sender gets immediate ACK
+            sender_ack = sender_ws.receive_json()
+            assert sender_ack["type"] == "chunk_ack"
+            assert sender_ack["index"] == 0
+
+            # Receiver receives chunk in real time directly from WebSocket
             rx_chunk = rx_ws.receive_json()
             assert rx_chunk["type"] == "chunk_data"
             assert rx_chunk["index"] == 0
-            _ = rx_ws.receive_json()      # progress
+            assert rx_chunk["data"] == b64_data
+
+            # Receiver decodes and matches exact payload
+            decoded = base64.b64decode(rx_chunk["data"])
+            assert decoded == chunk_data
+
+            # Confirm ZERO chunk files on server disk
+            assert not os.path.exists(os.path.join(DATA_DIR, "chunks"))
+            assert not os.path.exists(os.path.join(DATA_DIR, "downloads"))
 
             # Receiver ACKs
             rx_ws.send_json({"type": "rx_ack", "index": 0})
+            sender_rx_ack = sender_ws.receive_json()
+            assert sender_rx_ack["type"] == "rx_ack"
 
-            # 3. Simulate resume request (receiver asks for missing chunks)
-            rx_ws.send_json({"type": "resume_request"})
-            resume_state = rx_ws.receive_json()
-            assert resume_state["type"] == "resume_state"
-            assert resume_state["acknowledged_chunks"] == [0]
-            assert resume_state["missing_chunks"] == [1, 2, 3]
-
-            missing_req = sender_ws.receive_json()
-            assert missing_req["type"] == "request_missing"
-            assert missing_req["missing_chunks"] == [1, 2, 3]
-
-            # 4. Sender streams remaining chunks 1, 2, 3
-            for idx in (1, 2, 3):
-                sender_ws.send_json({
-                    "type": "chunk",
-                    "index": idx,
-                    "total": 4,
-                    "data": base64.b64encode(chunk_payloads[idx]).decode("utf-8"),
-                    "hash": hashlib.sha256(chunk_payloads[idx]).hexdigest(),
-                })
-                _ = sender_ws.receive_json()
-                _ = sender_ws.receive_json()
-                rx_c = rx_ws.receive_json()
-                assert rx_c["index"] == idx
-                _ = rx_ws.receive_json()
-                rx_ws.send_json({"type": "rx_ack", "index": idx})
-
-            # Complete transfer
+            # Sender completes
             sender_ws.send_json({"type": "complete"})
-            comp_sender = sender_ws.receive_json()
-            assert comp_sender["type"] == "completed"
-
-            comp_rx = rx_ws.receive_json()
-            assert comp_rx["type"] == "completed"
-
-    # Download verified file
-    dl_res = client.get(f"/api/transfers/{transfer_id}/download")
-    assert dl_res.status_code == 200
-    assert dl_res.content == full_payload
+            sender_completed = sender_ws.receive_json()
+            assert sender_completed["type"] == "completed"
+            rx_completed = rx_ws.receive_json()
+            assert rx_completed["type"] == "completed"
 
 
 def test_pause_and_resume_websocket():
@@ -286,26 +195,19 @@ def test_pause_and_resume_websocket():
             _ = sender_ws.receive_json()
             _ = rx_ws.receive_json()
 
-            # Sender pauses transfer
+            # Sender pauses
             sender_ws.send_json({"type": "pause"})
-            # Both sender and receiver receive peer_paused
-            pause_on_sender = sender_ws.receive_json()
-            assert pause_on_sender["type"] == "peer_paused"
-            pause_on_rx = rx_ws.receive_json()
-            assert pause_on_rx["type"] == "peer_paused"
+            assert sender_ws.receive_json()["type"] == "peer_paused"
+            assert rx_ws.receive_json()["type"] == "peer_paused"
 
-            # Check DB status is paused
             t = get_transfer(transfer_id)
             assert t["status"] == "paused"
 
-            # Sender resumes transfer
+            # Sender resumes
             sender_ws.send_json({"type": "resume"})
-            resume_on_sender = sender_ws.receive_json()
-            assert resume_on_sender["type"] == "peer_resumed"
-            resume_on_rx = rx_ws.receive_json()
-            assert resume_on_rx["type"] == "peer_resumed"
+            assert sender_ws.receive_json()["type"] == "peer_resumed"
+            assert rx_ws.receive_json()["type"] == "peer_resumed"
 
-            # Check DB status is transferring
             t = get_transfer(transfer_id)
             assert t["status"] == "transferring"
 
@@ -327,13 +229,10 @@ def test_cancel_transfer_websocket():
             _ = sender_ws.receive_json()
             _ = rx_ws.receive_json()
 
-            # Sender cancels transfer
+            # Sender cancels
             sender_ws.send_json({"type": "cancel"})
-            cancel_on_sender = sender_ws.receive_json()
-            assert cancel_on_sender["type"] == "peer_cancelled"
-            cancel_on_rx = rx_ws.receive_json()
-            assert cancel_on_rx["type"] == "peer_cancelled"
+            assert sender_ws.receive_json()["type"] == "peer_cancelled"
+            assert rx_ws.receive_json()["type"] == "peer_cancelled"
 
-            # DB record and storage should be deleted
+            # Session is deleted
             assert get_transfer(transfer_id) is None
-

@@ -3,8 +3,8 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>ChunkStream - Resumable File Transfer</title>
-  <meta name="description" content="Minimal, ultra-fast resumable chunked file transfers.">
+  <title>ChunkStream - Zero-Storage File Transfer</title>
+  <meta name="description" content="Direct, peer-to-peer resumable file streaming. Zero server storage.">
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -29,7 +29,7 @@
           </svg>
         </button>
       </div>
-      <p class="tagline">Direct, resumable peer-to-peer file transfer</p>
+      <p class="tagline">Direct live stream • Zero server storage</p>
     </header>
 
     <main class="app-main">
@@ -44,7 +44,7 @@
               </svg>
             </div>
             <span class="action-title">Send File</span>
-            <span class="action-desc">Select a file and get a 4-digit code</span>
+            <span class="action-desc">Select file to stream directly to peer</span>
           </button>
 
           <button type="button" class="action-card" id="btn-choice-receive">
@@ -55,8 +55,13 @@
               </svg>
             </div>
             <span class="action-title">Receive File</span>
-            <span class="action-desc">Enter code to download directly</span>
+            <span class="action-desc">Enter 4-digit code to receive stream</span>
           </button>
+        </div>
+
+        <div class="zero-storage-banner">
+          <span class="banner-icon">🔒</span>
+          <span>Files stream directly between devices. Nothing is stored on the server.</span>
         </div>
       </section>
 
@@ -74,7 +79,7 @@
                 <line x1="12" y1="3" x2="12" y2="15"></line>
               </svg>
               <div class="drop-text">Choose a file or drag & drop here</div>
-              <div class="drop-sub">Any file format up to 10 GB</div>
+              <div class="drop-sub">Streams directly • Unlimited file size</div>
             </div>
           </div>
 
@@ -187,14 +192,8 @@
               <button type="button" class="btn btn-danger" id="btn-cancel-receive">Cancel</button>
             </div>
 
-            <div id="rx-download-ready-box" class="hidden">
-              <button type="button" class="btn btn-primary btn-large" id="btn-trigger-download">
-                Download File
-              </button>
-            </div>
-
             <div id="rx-cleared-box" class="hidden">
-              <div class="success-message" id="rx-status-finished">✓ File ready</div>
+              <div class="success-message" id="rx-status-finished">✓ File saved directly to your device!</div>
               <button type="button" class="btn btn-secondary" id="btn-receive-again">Receive Another File</button>
             </div>
           </div>
